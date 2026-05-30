@@ -24,7 +24,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  CHART_NAME: tailgate
+  CHART_NAME: tailgate-operator
 
 jobs:
   verify-crds:
