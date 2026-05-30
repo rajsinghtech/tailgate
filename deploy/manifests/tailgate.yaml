@@ -1,0 +1,109 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tailgate-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tailgate
+  namespace: tailgate-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tailgate
+rules:
+  - apiGroups: ["tailscale.rajsingh.info"]
+    resources: ["egressgroups", "egressgroups/status", "egressgroups/finalizers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["daemonsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tailgate
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tailgate
+subjects:
+  - kind: ServiceAccount
+    name: tailgate
+    namespace: tailgate-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tailgate-operator
+  namespace: tailgate-system
+  labels: { app: tailgate-operator }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: tailgate-operator } }
+  template:
+    metadata: { labels: { app: tailgate-operator } }
+    spec:
+      serviceAccountName: tailgate
+      containers:
+        - name: operator
+          image: tailgate-operator:v9
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POD_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            - name: GW_IMAGE
+              value: tailgate-gateway:v9
+            - name: TS_TAILNET
+              valueFrom: { secretKeyRef: { name: tailgate-tailnet-creds, key: TS_TAILNET } }
+            - name: TS_OAUTH_CLIENT_ID
+              valueFrom: { secretKeyRef: { name: tailgate-tailnet-creds, key: TS_OAUTH_CLIENT_ID } }
+            - name: TS_OAUTH_CLIENT_SECRET
+              valueFrom: { secretKeyRef: { name: tailgate-tailnet-creds, key: TS_OAUTH_CLIENT_SECRET } }
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: tailgate-agent
+  namespace: tailgate-system
+  labels: { app: tailgate-agent }
+spec:
+  selector: { matchLabels: { app: tailgate-agent } }
+  template:
+    metadata: { labels: { app: tailgate-agent } }
+    spec:
+      serviceAccountName: tailgate
+      hostNetwork: true
+      hostPID: true
+      dnsPolicy: ClusterFirstWithHostNet
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: agent
+          image: tailgate-agent:v9
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+          env:
+            - name: NODE_NAME
+              valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+            - name: TAILGATE_NAMESPACE
+              value: tailgate-system
+            # In-cluster ranges kept on the primary CNI for exit-node members so kube-dns /
+            # API never blackhole through the full tunnel. Production should carve BOTH the
+            # pod and service CIDRs (e.g. "10.244.0.0/16,10.96.0.0/12"). The e2e carves the
+            # SERVICE CIDR only so an in-cluster echo POD (pod CIDR) tunnels through the exit
+            # node, giving an observable source-IP traversal proof.
+            - name: TAILGATE_CLUSTER_CIDRS
+              value: "10.96.0.0/12"

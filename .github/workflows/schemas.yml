@@ -1,0 +1,77 @@
+name: Schemas
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'api/**'
+      - 'config/crd/**'
+      - 'config/samples/**'
+      - 'hack/openapi2jsonschema.py'
+      - 'hack/generate-schemas.sh'
+      - '.github/workflows/schemas.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'api/**'
+      - 'config/crd/**'
+      - 'config/samples/**'
+      - 'hack/openapi2jsonschema.py'
+      - 'hack/generate-schemas.sh'
+      - '.github/workflows/schemas.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  generate-schemas:
+    name: Generate & Validate Schemas
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      - name: Generate JSON schemas
+        run: hack/generate-schemas.sh
+
+      - name: List generated schemas
+        run: ls -la schemas/
+
+      - name: Check for schema changes
+        run: |
+          if [[ -n "$(git status --porcelain schemas/)" ]]; then
+            echo "::error::JSON schemas are out of date. Run 'hack/generate-schemas.sh' and commit the changes."
+            git diff schemas/
+            exit 1
+          fi
+
+      - name: Install kubeconform
+        uses: jaxxstorm/action-install-gh-release@v3.0.0
+        with:
+          repo: yannh/kubeconform
+          tag: v0.7.0
+
+      - name: Validate sample manifests
+        run: |
+          shopt -s nullglob
+          samples=(config/samples/*.yaml)
+          if [ ${#samples[@]} -eq 0 ]; then
+            echo "No sample manifests under config/samples/ — skipping kubeconform validation."
+            exit 0
+          fi
+          kubeconform -strict -summary \
+            -schema-location default \
+            -schema-location 'schemas/{{ .ResourceKind }}_{{ .ResourceAPIVersion }}.json' \
+            -ignore-filename-pattern 'kustomization.yaml' \
+            "${samples[@]}"

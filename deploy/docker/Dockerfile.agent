@@ -1,0 +1,40 @@
+# tailgate-agent — node-local DaemonSet (privileged + hostPID + hostNetwork) that
+# veth-stitches member pods into the group gateway netns. Ships the tailgate-cni
+# binary alongside it. The agent cmd is linux-only (//go:build linux); the build
+# below targets linux.
+#
+# Multi-stage build from source. NOTE: go.mod has a LOCAL `replace tailscale.com`
+# pointing at an on-disk checkout; CI must repoint that replace to a published
+# version before this builds (the prior step copied prebuilt binaries instead).
+#
+# BUILDPLATFORM compiles natively then cross-targets, which is faster than QEMU.
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.26 AS builder
+ARG TARGETOS
+ARG TARGETARCH
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
+
+WORKDIR /workspace
+
+# Module files first for layer caching.
+COPY go.mod go.sum ./
+RUN GOWORK=off go mod download
+
+# Source (filtered by .dockerignore).
+COPY . .
+
+# Static binaries, no cgo. GOWORK=off keeps the parent go.work out of the build.
+RUN GOWORK=off CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a \
+    -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildDate=${BUILD_DATE}" \
+    -o tailgate-agent ./cmd/tailgate-agent && \
+    GOWORK=off CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a \
+    -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildDate=${BUILD_DATE}" \
+    -o tailgate-cni ./cmd/tailgate-cni
+
+# Not nonroot: the agent runs privileged (netns/netlink + /proc scan) and must be root.
+FROM gcr.io/distroless/static
+WORKDIR /
+COPY --from=builder /workspace/tailgate-agent /usr/local/bin/tailgate-agent
+COPY --from=builder /workspace/tailgate-cni   /usr/local/bin/tailgate-cni
+ENTRYPOINT ["/usr/local/bin/tailgate-agent"]

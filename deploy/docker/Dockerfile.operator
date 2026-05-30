@@ -1,0 +1,29 @@
+# tailgate-operator — the EgressGroup controller (Deployment).
+#
+# BUILDPLATFORM compiles natively then cross-targets, which is faster than QEMU.
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.26 AS builder
+ARG TARGETOS
+ARG TARGETARCH
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
+
+WORKDIR /workspace
+
+# Module files first for layer caching.
+COPY go.mod go.sum ./
+RUN GOWORK=off go mod download
+
+# Source (filtered by .dockerignore).
+COPY . .
+
+# Static binary, no cgo. GOWORK=off keeps the parent go.work out of the build.
+RUN GOWORK=off CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a \
+    -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildDate=${BUILD_DATE}" \
+    -o tailgate-operator ./cmd/tailgate-operator
+
+FROM gcr.io/distroless/static:nonroot
+WORKDIR /
+COPY --from=builder /workspace/tailgate-operator /usr/local/bin/tailgate-operator
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/tailgate-operator"]

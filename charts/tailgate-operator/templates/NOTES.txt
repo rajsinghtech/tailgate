@@ -1,0 +1,71 @@
+Thank you for installing {{ .Chart.Name }}!
+
+Your release is named {{ .Release.Name }}.
+
+To learn more about the release, try:
+
+  $ helm status {{ .Release.Name }}
+  $ helm get all {{ .Release.Name }}
+
+## Getting Started
+
+The tailgate-operator is now running and watching for EgressGroup custom resources.
+{{- if .Values.agent.enabled }}
+A per-node agent DaemonSet is running on every node to stitch member pods into the
+gateway network namespace.
+{{- end }}
+
+{{- if .Values.tailnet.create }}
+{{- if not .Values.tailnet.oauthClientID }}
+
+WARNING: tailnet.create is true but tailnet.oauthClientID is empty. The operator
+cannot mint gateway authkeys until you set tailnet.oauthClientID, tailnet.oauthClientSecret
+and tailnet.tailnet (or point tailnet.secretName at an existing Secret with
+tailnet.create=false).
+{{- end }}
+{{- else }}
+
+NOTE: tailnet.create is false. Make sure the Secret "{{ .Values.tailnet.secretName }}"
+exists in namespace {{ .Release.Namespace }} with keys TS_TAILNET, TS_OAUTH_CLIENT_ID
+and TS_OAUTH_CLIENT_SECRET.
+{{- end }}
+
+### Create an EgressGroup
+
+Give a set of pods native tailnet egress through one shared gateway:
+
+  cat <<EOF | kubectl apply -f -
+  apiVersion: tailscale.rajsingh.info/v1alpha1
+  kind: EgressGroup
+  metadata:
+    name: my-egress
+  spec:
+    mode: cgnat
+    attach: routed
+    replicas: 1
+    selector:
+      podSelector:
+        matchLabels:
+          tailgate.rajsingh.info/egress: my-egress
+  EOF
+
+### Check Status
+
+  kubectl get egressgroups
+  kubectl describe eg my-egress
+
+View operator logs:
+
+  kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=operator -f
+
+{{- if .Values.agent.enabled }}
+
+View agent logs on every node:
+
+  kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=agent -f
+{{- end }}
+
+## Documentation
+
+For more information, visit:
+  https://github.com/rajsinghtech/tailgate

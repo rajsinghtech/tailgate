@@ -1,0 +1,62 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "baseBranchPatterns": [
+    "main"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Track the tailscale/tailscale gateway image version across Dockerfiles, manifests, chart values and e2e tests",
+      "fileMatch": [
+        "deploy/docker/Dockerfile\\.gateway",
+        "deploy/manifests/.+\\.yaml",
+        "charts/tailgate/values\\.yaml",
+        "config/samples/.+\\.yaml",
+        "test/e2e/.+_test\\.go"
+      ],
+      "matchStrings": [
+        "tailscale/tailscale:(?<currentValue>v[\\d.]+)"
+      ],
+      "depNameTemplate": "tailscale/tailscale",
+      "datasourceTemplate": "docker"
+    }
+  ],
+  "packageRules": [
+    {
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["tailscale.com"],
+      "enabled": false,
+      "description": "Pinned via a local replace directive; the human resolves tailscale.com version selection separately"
+    },
+    {
+      "matchManagers": ["gomod"],
+      "groupName": "k8s",
+      "matchPackageNames": [
+        "/k8s.io/*/",
+        "/sigs.k8s.io/*/"
+      ]
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor", "patch", "digest"],
+      "groupName": "actions",
+      "automerge": true
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["major"],
+      "groupName": "major-actions"
+    },
+    {
+      "matchUpdateTypes": ["minor", "patch", "digest"],
+      "automerge": true
+    },
+    {
+      "matchManagers": ["regex"],
+      "matchPackageNames": ["tailscale/tailscale"],
+      "groupName": "tailscale-gateway",
+      "description": "Group all tailscale gateway image version bumps into a single PR"
+    }
+  ]
+}

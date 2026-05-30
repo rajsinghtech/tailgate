@@ -1,0 +1,84 @@
+{{- if .Values.rbac.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "tailgate-operator.clusterRoleName" . }}
+  labels:
+    {{- include "tailgate-operator.labels" . | nindent 4 }}
+rules:
+# EgressGroup custom resources
+- apiGroups:
+  - tailscale.rajsingh.info
+  resources:
+  - egressgroups
+  - egressgroups/status
+  - egressgroups/finalizers
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+# Pods and namespaces are read to select EgressGroup members
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  - namespaces
+  verbs:
+  - get
+  - list
+  - watch
+# Secrets and configmaps back the gateway authkeys and config
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+# Per-group gateway DaemonSets
+- apiGroups:
+  - apps
+  resources:
+  - daemonsets
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+# Events for reconcile reporting
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "tailgate-operator.fullname" . }}-manager-rolebinding
+  labels:
+    {{- include "tailgate-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "tailgate-operator.clusterRoleName" . }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "tailgate-operator.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+{{- end }}

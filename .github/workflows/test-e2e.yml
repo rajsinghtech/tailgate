@@ -1,0 +1,120 @@
+name: E2E Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# This module uses a local `replace tailscale.com => ...` and is built outside any
+# go.work, so force GOWORK=off for every go invocation in CI.
+env:
+  GOWORK: off
+  # GitHub-hosted runners are amd64; hack/build.sh defaults to arm64 (Apple Silicon).
+  ARCH: amd64
+  KIND_CLUSTER: tailgate-e2e
+
+jobs:
+  # Gate the expensive kind job on the org OAuth secrets being present. They are
+  # unavailable on forked-PR runs, so this skips cleanly there instead of spinning
+  # up a cluster only for every test to t.Skip().
+  check-secrets:
+    name: Check Secrets
+    runs-on: ubuntu-latest
+    outputs:
+      has-creds: ${{ steps.check.outputs.has-creds }}
+    steps:
+      - id: check
+        env:
+          TS_ORG_OAUTH_CLIENT_ID: ${{ secrets.TS_ORG_OAUTH_CLIENT_ID }}
+          TS_ORG_OAUTH_CLIENT_SECRET: ${{ secrets.TS_ORG_OAUTH_CLIENT_SECRET }}
+        run: |
+          if [ -n "$TS_ORG_OAUTH_CLIENT_ID" ] && [ -n "$TS_ORG_OAUTH_CLIENT_SECRET" ]; then
+            echo "has-creds=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-creds=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::TS_ORG_OAUTH_CLIENT_ID/SECRET not set — skipping e2e (expected on forks)."
+          fi
+
+  e2e:
+    name: Kind E2E Tests
+    needs: check-secrets
+    if: needs.check-secrets.outputs.has-creds == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install kind
+        uses: helm/kind-action@v1
+        with:
+          install_only: true
+          version: v0.31.0
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: Create kind cluster
+        run: |
+          kind create cluster --name "$KIND_CLUSTER" --config test/kind/v4.yaml --wait 120s
+          kubectl config use-context "kind-$KIND_CLUSTER"
+
+      - name: Build and load images
+        # hack/build.sh builds the operator/agent/gateway binaries + images and
+        # `kind load`s all three into the cluster. ARCH=amd64 is set in env.
+        run: bash hack/build.sh ci "$KIND_CLUSTER"
+
+      - name: Install CRD and manifests
+        run: |
+          kubectl apply -f config/crd/tailscale.rajsingh.info_egressgroups.yaml
+          # Pin the just-built `ci` tag into a temp copy of the manifest.
+          tmp="$(mktemp)"
+          sed -E 's#tailgate-(operator|agent|gateway):[A-Za-z0-9._-]+#tailgate-\1:ci#g' \
+            deploy/manifests/tailgate.yaml > "$tmp"
+          kubectl apply -f "$tmp"
+          # Placeholder creds so the operator pod can boot; each test overwrites the
+          # secret with its own ephemeral-tailnet creds and restarts the operator.
+          kubectl -n tailgate-system create secret generic tailgate-tailnet-creds \
+            --from-literal=TS_TAILNET=placeholder \
+            --from-literal=TS_OAUTH_CLIENT_ID=placeholder \
+            --from-literal=TS_OAUTH_CLIENT_SECRET=placeholder \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n tailgate-system rollout status deploy/tailgate-operator --timeout=120s
+          kubectl -n tailgate-system rollout status ds/tailgate-agent --timeout=120s
+
+      - name: Run e2e tests
+        env:
+          TS_ORG_OAUTH_CLIENT_ID: ${{ secrets.TS_ORG_OAUTH_CLIENT_ID }}
+          TS_ORG_OAUTH_CLIENT_SECRET: ${{ secrets.TS_ORG_OAUTH_CLIENT_SECRET }}
+        run: go test -tags e2e -count=1 -timeout 30m -v ./test/e2e/...
+
+      - name: Collect debug info
+        if: failure()
+        run: |
+          mkdir -p /tmp/e2e-debug
+          kubectl get all -A > /tmp/e2e-debug/resources.txt 2>&1 || true
+          kubectl -n tailgate-system describe pods > /tmp/e2e-debug/pods.txt 2>&1 || true
+          kubectl -n tailgate-system logs deploy/tailgate-operator --tail=500 > /tmp/e2e-debug/operator.txt 2>&1 || true
+          kubectl -n tailgate-system logs ds/tailgate-agent --tail=500 > /tmp/e2e-debug/agent.txt 2>&1 || true
+
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-logs
+          path: /tmp/e2e-debug/
+          retention-days: 7
+          if-no-files-found: warn

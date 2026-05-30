@@ -1,0 +1,148 @@
+# Default values for tailgate-operator
+# This is a YAML-formatted file.
+
+# -- Number of operator replicas (typically 1; the operator does not currently
+# run leader election, so keep this at 1).
+replicaCount: 1
+
+operator:
+  image:
+    # -- Operator container image repository
+    repository: ghcr.io/rajsinghtech/tailgate-operator
+    # -- Image pull policy
+    pullPolicy: IfNotPresent
+    # -- Overrides the image tag (default is the chart appVersion)
+    tag: ""
+  # Resource requests and limits for the operator
+  resources:
+    limits:
+      cpu: 500m
+      memory: 256Mi
+    requests:
+      cpu: 10m
+      memory: 128Mi
+  # -- Pod annotations for the operator Deployment
+  podAnnotations: {}
+  # -- Pod labels for the operator Deployment
+  podLabels: {}
+  # -- Node selector for operator pods
+  nodeSelector: {}
+  # -- Tolerations for operator pods
+  tolerations: []
+  # -- Affinity rules for operator pods
+  affinity: {}
+
+# Per-node agent DaemonSet. The agent veth-stitches member pods into the gateway
+# netns, so it must run privileged with hostPID + hostNetwork on every node.
+agent:
+  # -- Deploy the per-node agent DaemonSet
+  enabled: true
+  image:
+    # -- Agent container image repository (bundles tailgate-cni)
+    repository: ghcr.io/rajsinghtech/tailgate-agent
+    # -- Image pull policy
+    pullPolicy: IfNotPresent
+    # -- Overrides the image tag (default is the chart appVersion)
+    tag: ""
+  # -- In-cluster CIDRs kept on the primary CNI for exit-node members so kube-dns /
+  # the API server never blackhole through the full tunnel. Production should carve
+  # BOTH the pod and service CIDRs (e.g. "10.244.0.0/16,10.96.0.0/12"). Comma-separated.
+  clusterCIDRs: "10.96.0.0/12"
+  # Resource requests and limits for the agent
+  resources:
+    limits:
+      cpu: 200m
+      memory: 128Mi
+    requests:
+      cpu: 10m
+      memory: 64Mi
+  # -- Pod annotations for the agent DaemonSet
+  podAnnotations: {}
+  # -- Pod labels for the agent DaemonSet
+  podLabels: {}
+  # -- Node selector for agent pods
+  nodeSelector: {}
+  # -- Tolerations for agent pods. Defaults to running everywhere (Exists).
+  tolerations:
+    - operator: Exists
+
+# Per-group gateway DaemonSet image. The operator stamps this image into the
+# gateway workloads it creates for each EgressGroup; it is not run by the chart.
+gateway:
+  image:
+    # -- Gateway container image repository
+    repository: ghcr.io/rajsinghtech/tailgate-gateway
+    # -- Overrides the gateway image tag (default is the chart appVersion)
+    tag: ""
+
+# Tailnet credentials. The operator mints ephemeral authkeys via the Tailscale
+# OAuth API for the gateways it provisions.
+tailnet:
+  # -- Create the tailnet credentials Secret from the values below. Set to false to
+  # reference an existing Secret instead.
+  create: true
+  # -- Name of the Secret holding the tailnet OAuth credentials.
+  secretName: tailgate-tailnet-creds
+  # -- Tailnet name (e.g. "example.com"). Stored under key TS_TAILNET.
+  tailnet: ""
+  # -- OAuth client ID. Stored under key TS_OAUTH_CLIENT_ID.
+  oauthClientID: ""
+  # -- OAuth client secret. Stored under key TS_OAUTH_CLIENT_SECRET.
+  oauthClientSecret: ""
+
+# -- Image pull secrets for private registries
+imagePullSecrets: []
+# -- Override the chart name
+nameOverride: ""
+# -- Override the full name
+fullnameOverride: ""
+
+serviceAccount:
+  # -- Create a ServiceAccount (shared by the operator and the agent)
+  create: true
+  # -- Annotations to add to the ServiceAccount
+  annotations: {}
+  # -- ServiceAccount name (generated if not set and create is true)
+  name: ""
+
+# Pod security context for the operator
+podSecurityContext:
+  # -- Run as non-root user
+  runAsNonRoot: true
+  # -- Seccomp profile type
+  seccompProfile:
+    type: RuntimeDefault
+
+# Container security context for the operator
+securityContext:
+  # -- Read-only root filesystem
+  readOnlyRootFilesystem: true
+  # -- Disallow privilege escalation
+  allowPrivilegeEscalation: false
+  # -- Drop all capabilities
+  capabilities:
+    drop:
+      - "ALL"
+
+# -- Priority class name for operator and agent pods
+priorityClassName: ""
+
+# -- Termination grace period in seconds for the operator
+terminationGracePeriodSeconds: 10
+
+# CRD installation
+crds:
+  # -- Install CRDs with Helm
+  install: true
+  # -- Keep CRDs on chart uninstall
+  keep: true
+  # -- Annotations for CRDs
+  annotations: {}
+
+# RBAC configuration
+rbac:
+  # -- Create RBAC resources (ClusterRole + ClusterRoleBinding)
+  create: true
+
+# -- Extra Kubernetes objects to deploy with the chart (supports templating)
+extraObjects: []
