@@ -7,6 +7,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 
 	egressv1 "github.com/rajsinghtech/tailgate/api/v1alpha1"
@@ -75,9 +76,17 @@ func gatewayDaemonSet(eg *egressv1.EgressGroup, ns, gwImage, tailnet string) *ap
 		ObjectMeta: metav1.ObjectMeta{Name: gatewayName(eg.Name), Namespace: ns, Labels: l},
 		Spec: appsv1.DaemonSetSpec{
 			Selector: &metav1.LabelSelector{MatchLabels: l},
+			// One node's gateway at a time; a node's member egress is briefly interrupted
+			// only while its own gateway pod rolls (the agent re-stitches onto the new netns).
+			UpdateStrategy: appsv1.DaemonSetUpdateStrategy{
+				Type:          appsv1.RollingUpdateDaemonSetStrategyType,
+				RollingUpdate: &appsv1.RollingUpdateDaemonSet{MaxUnavailable: ptr.To(intstr.FromInt32(1))},
+			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: l},
 				Spec: corev1.PodSpec{
+					// tailscaled needs no long drain; a short grace shrinks the rolling-update gap.
+					TerminationGracePeriodSeconds: ptr.To(int64(15)),
 					Containers: []corev1.Container{{
 						Name:  "gateway",
 						Image: gwImage,
@@ -98,6 +107,14 @@ func gatewayDaemonSet(eg *egressv1.EgressGroup, ns, gwImage, tailnet string) *ap
 							InitialDelaySeconds: 3,
 							PeriodSeconds:       5,
 							FailureThreshold:    30,
+						},
+						// Restart a wedged/dead tailscaled (daemon unresponsive), but not on a
+						// transient tailnet disconnect — `live` checks only LocalAPI liveness.
+						LivenessProbe: &corev1.Probe{
+							ProbeHandler:        corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"/usr/local/bin/tailgate-gateway", "live"}}},
+							InitialDelaySeconds: 30,
+							PeriodSeconds:       10,
+							FailureThreshold:    3,
 						},
 					}},
 					Volumes: []corev1.Volume{
