@@ -1,0 +1,57 @@
+# Build context is the repo root. Keep Go source (cmd/, api/, internal/, go.mod,
+# go.sum); drop everything not needed to compile so the context stays small and
+# layer caching is stable.
+
+# Prebuilt binaries and build output
+bin/
+/tailgate-operator
+/tailgate-agent
+/tailgate-cni
+/tailgate-gateway
+dist/
+
+# Test/coverage artifacts
+*.test
+cover.out
+*.out
+
+# Logs and local env / secrets
+*.log
+.env
+*.kubeconfig
+
+# git
+.git/
+.gitignore
+
+# Go workspace (resolved per-machine, must not enter the image build)
+go.work
+go.work.sum
+
+# Docs, design, and tooling not needed to build
+*.md
+docs/
+hack/
+
+# Kubernetes manifests and Helm chart (not needed in image)
+config/
+charts/
+deploy/manifests/
+
+# e2e tests (not compiled into images)
+test/
+
+# editor and IDE paraphernalia
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Container files
+deploy/docker/
+.dockerignore
+
+# AI slop
+CLAUDE.md
+.claude/

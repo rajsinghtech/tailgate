@@ -1,0 +1,30 @@
+apiVersion: v2
+name: tailgate-operator
+description: A Kubernetes operator that gives pods native Tailscale egress through a shared tailscaled gateway per EgressGroup
+type: application
+version: 0.0.1
+appVersion: "0.0.1"
+kubeVersion: ">=1.25.0-0"
+home: https://github.com/rajsinghtech/tailgate
+sources:
+  - https://github.com/rajsinghtech/tailgate
+maintainers:
+  - name: rajsinghtech
+    url: https://github.com/rajsinghtech
+keywords:
+  - tailscale
+  - tailnet
+  - egress
+  - wireguard
+  - kubernetes
+  - operator
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/operator: "true"
+  artifacthub.io/operatorCapabilities: Full Lifecycle
+  artifacthub.io/crds: |
+    - kind: EgressGroup
+      version: v1alpha1
+      name: egressgroups.tailscale.rajsingh.info
+      displayName: Egress Group
+      description: A set of pods that egress onto the tailnet through one shared gateway

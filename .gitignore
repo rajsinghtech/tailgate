@@ -1,0 +1,47 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+
+# stray top-level build outputs (e.g. a locally-built tailgate-gateway)
+/tailgate-operator
+/tailgate-agent
+/tailgate-cni
+/tailgate-gateway
+
+# Test binary, built with `go test -c`
+*.test
+
+# Coverage output
+cover.out
+cover*.out
+*.out
+
+# Logs
+*.log
+
+# Local env / secrets
+.env
+*.kubeconfig
+
+# Go workspace file (resolved per-machine)
+go.work
+go.work.sum
+
+# editor and IDE paraphernalia
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Build artifacts
+dist/
+
+# AI slop
+CLAUDE.md
+.claude/
+.claude.worktrees/

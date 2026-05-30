@@ -1,0 +1,167 @@
+name: Helm Chart
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'charts/**'
+      - 'config/crd/**'
+      - 'api/**'
+      - '.github/workflows/helm.yml'
+    tags:
+      - 'v*'
+  pull_request:
+    paths:
+      - 'charts/**'
+      - 'config/crd/**'
+      - 'api/**'
+      - '.github/workflows/helm.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  CHART_NAME: tailgate
+
+jobs:
+  verify-crds:
+    name: Verify CRDs in Sync
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check CRDs are in sync
+        run: |
+          if [ ! -d "charts/${{ env.CHART_NAME }}/crd-bases" ]; then
+            echo "Helm chart not scaffolded yet (charts/${{ env.CHART_NAME }}/crd-bases missing) — skipping CRD sync check."
+            exit 0
+          fi
+          echo "Checking if Helm chart CRDs match the source CRDs..."
+          MISMATCH=0
+          for crd in config/crd/*.yaml; do
+            filename=$(basename "$crd")
+            helm_crd="charts/${{ env.CHART_NAME }}/crd-bases/$filename"
+            if [ ! -f "$helm_crd" ]; then
+              echo "ERROR: $filename missing from Helm chart crd-bases/"
+              MISMATCH=1
+            elif ! diff -q "$crd" "$helm_crd" > /dev/null 2>&1; then
+              echo "ERROR: $filename differs between config/crd/ and charts/${{ env.CHART_NAME }}/crd-bases/"
+              diff "$crd" "$helm_crd" || true
+              MISMATCH=1
+            else
+              echo "OK: $filename is in sync"
+            fi
+          done
+          if [ $MISMATCH -eq 1 ]; then
+            echo ""
+            echo "CRDs are out of sync! Copy config/crd/*.yaml into charts/${{ env.CHART_NAME }}/crd-bases/ to fix."
+            exit 1
+          fi
+          echo "All CRDs are in sync."
+
+  lint:
+    name: Lint Chart
+    runs-on: ubuntu-latest
+    needs: verify-crds
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check chart exists
+        id: chart
+        run: |
+          if [ -f "charts/${{ env.CHART_NAME }}/Chart.yaml" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Helm chart charts/${{ env.CHART_NAME }} not scaffolded yet — skipping lint/template."
+          fi
+
+      - name: Set up Helm
+        if: steps.chart.outputs.exists == 'true'
+        uses: azure/setup-helm@v5
+        with:
+          version: v3.14.0
+
+      - name: Lint chart
+        if: steps.chart.outputs.exists == 'true'
+        run: helm lint charts/${{ env.CHART_NAME }}
+
+      - name: Template chart
+        if: steps.chart.outputs.exists == 'true'
+        run: helm template ${{ env.CHART_NAME }} charts/${{ env.CHART_NAME }} --namespace tailgate-system
+
+  publish:
+    name: Publish Chart
+    runs-on: ubuntu-latest
+    needs: lint
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: v3.14.0
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+
+      - name: Get chart version
+        id: chart_version
+        run: |
+          # Use the tag version (strip the 'v' prefix)
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Chart version: ${VERSION}"
+
+      - name: Update chart version
+        run: |
+          sed -i "s/^version:.*/version: ${{ steps.chart_version.outputs.VERSION }}/" charts/${{ env.CHART_NAME }}/Chart.yaml
+          sed -i "s/^appVersion:.*/appVersion: \"${{ steps.chart_version.outputs.VERSION }}\"/" charts/${{ env.CHART_NAME }}/Chart.yaml
+
+      - name: Update image tags in values
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          sed -i "s/tag: \"\"/tag: \"${TAG}\"/" charts/${{ env.CHART_NAME }}/values.yaml
+
+      - name: Sync CRDs to Helm chart
+        run: |
+          mkdir -p charts/${{ env.CHART_NAME }}/crd-bases
+          cp config/crd/*.yaml charts/${{ env.CHART_NAME }}/crd-bases/
+          echo "CRDs synced to Helm chart"
+
+      - name: Package chart
+        run: |
+          mkdir -p dist
+          helm package charts/${{ env.CHART_NAME }} -d dist/
+
+      - name: Push chart to GHCR
+        run: |
+          helm push dist/${{ env.CHART_NAME }}-${{ steps.chart_version.outputs.VERSION }}.tgz oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts
+
+      - name: Summary
+        run: |
+          echo "### Helm Chart Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Chart:** ${{ env.CHART_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ steps.chart_version.outputs.VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Registry:** oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts/${{ env.CHART_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Install command:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "helm install tailgate oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts/${{ env.CHART_NAME }} --version ${{ steps.chart_version.outputs.VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
