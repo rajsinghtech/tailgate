@@ -110,73 +110,110 @@ func ensureGatewayBridge(gwNsPath string) error {
 	})
 }
 
+// alreadyWired reports whether the member is already stitched to THIS gateway: ts0
+// present in the member netns AND its peer (the gw-side veth) present in the current
+// gateway netns. A gateway pod restart changes gwNsPath, so the peer is absent there and
+// this returns false (forcing a re-stitch onto the new gateway); a mere agent restart
+// leaves both ends in place, so it returns true and Wire stays non-destructive.
+func alreadyWired(memberNs, gwNsPath, gwName string) bool {
+	have := false
+	if err := withNetNS(memberNs, func() error {
+		if _, e := netlink.LinkByName(podIf); e == nil {
+			have = true
+		}
+		return nil
+	}); err != nil || !have {
+		return false
+	}
+	peer := false
+	if err := withNetNS(gwNsPath, func() error {
+		if _, e := netlink.LinkByName(gwName); e == nil {
+			peer = true
+		}
+		return nil
+	}); err != nil {
+		return false
+	}
+	return peer
+}
+
 // Wire connects a member pod to its node-local gateway: a veth pair with the member
 // end (ts0) in the pod netns routing tailnet CIDRs at the gateway bridge, and the
-// gateway end enslaved to tgbr0 in the gateway netns. Idempotent.
+// gateway end enslaved to tgbr0 in the gateway netns. Idempotent and non-disruptive:
+// if the member is already stitched to this gateway the veth is left in place and only
+// the addrs/routes are re-applied (all Replace ops), so an agent restart — which starts
+// with an empty wiring map and re-Wires every member — never flaps live egress.
 func Wire(info netinfo.PodNetInfo, gwNsPath string, routes []string, exit *ExitOpts) error {
 	if err := ensureGatewayBridge(gwNsPath); err != nil {
 		return err
 	}
 	memberName, gwName := hostVethNames(info.PodIP)
+	adopted := alreadyWired(info.Netns, gwNsPath, gwName)
 
-	// Clean any stale host-side veth from a prior attempt, then create the pair in
-	// the agent's (host) netns.
-	if l, err := netlink.LinkByName(memberName); err == nil {
-		_ = netlink.LinkDel(l)
-	}
-	veth := &netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: memberName}, PeerName: gwName}
-	if err := netlink.LinkAdd(veth); err != nil {
-		return fmt.Errorf("add veth: %w", err)
-	}
-	memberLink, err := netlink.LinkByName(memberName)
-	if err != nil {
-		return err
-	}
-	gwLink, err := netlink.LinkByName(gwName)
-	if err != nil {
-		return err
-	}
-
-	// Move ends into their namespaces.
-	memberH, err := netns.GetFromPath(info.Netns)
-	if err != nil {
-		_ = netlink.LinkDel(veth)
-		return fmt.Errorf("open member netns: %w", err)
-	}
-	defer memberH.Close()
-	gwH, err := netns.GetFromPath(gwNsPath)
-	if err != nil {
-		_ = netlink.LinkDel(veth)
-		return fmt.Errorf("open gw netns: %w", err)
-	}
-	defer gwH.Close()
-	if err := netlink.LinkSetNsFd(memberLink, int(memberH)); err != nil {
-		return fmt.Errorf("move member end: %w", err)
-	}
-	if err := netlink.LinkSetNsFd(gwLink, int(gwH)); err != nil {
-		return fmt.Errorf("move gw end: %w", err)
-	}
-
-	// Gateway side: enslave to bridge, up.
-	if err := withNetNS(gwNsPath, func() error {
-		l, err := netlink.LinkByName(gwName)
+	if !adopted {
+		// Clean any stale host-side veth from a prior attempt, then create the pair in
+		// the agent's (host) netns.
+		if l, err := netlink.LinkByName(memberName); err == nil {
+			_ = netlink.LinkDel(l)
+		}
+		veth := &netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: memberName}, PeerName: gwName}
+		if err := netlink.LinkAdd(veth); err != nil {
+			return fmt.Errorf("add veth: %w", err)
+		}
+		memberLink, err := netlink.LinkByName(memberName)
 		if err != nil {
 			return err
 		}
-		br, err := netlink.LinkByName(gwBridge)
+		gwLink, err := netlink.LinkByName(gwName)
 		if err != nil {
 			return err
 		}
-		if err := netlink.LinkSetMaster(l, br); err != nil {
-			return err
+
+		// Move ends into their namespaces; on any partial failure delete the pair so a
+		// half-moved veth never lingers in the host netns.
+		memberH, err := netns.GetFromPath(info.Netns)
+		if err != nil {
+			_ = netlink.LinkDel(veth)
+			return fmt.Errorf("open member netns: %w", err)
 		}
-		return netlink.LinkSetUp(l)
-	}); err != nil {
-		return fmt.Errorf("gw side: %w", err)
+		defer memberH.Close()
+		gwH, err := netns.GetFromPath(gwNsPath)
+		if err != nil {
+			_ = netlink.LinkDel(veth)
+			return fmt.Errorf("open gw netns: %w", err)
+		}
+		defer gwH.Close()
+		if err := netlink.LinkSetNsFd(memberLink, int(memberH)); err != nil {
+			_ = netlink.LinkDel(veth) // both ends still in host netns
+			return fmt.Errorf("move member end: %w", err)
+		}
+		if err := netlink.LinkSetNsFd(gwLink, int(gwH)); err != nil {
+			_ = netlink.LinkDel(gwLink) // member end already moved; deleting the gw end drops the pair
+			return fmt.Errorf("move gw end: %w", err)
+		}
+
+		// Gateway side: enslave to bridge, up.
+		if err := withNetNS(gwNsPath, func() error {
+			l, err := netlink.LinkByName(gwName)
+			if err != nil {
+				return err
+			}
+			br, err := netlink.LinkByName(gwBridge)
+			if err != nil {
+				return err
+			}
+			if err := netlink.LinkSetMaster(l, br); err != nil {
+				return err
+			}
+			return netlink.LinkSetUp(l)
+		}); err != nil {
+			return fmt.Errorf("gw side: %w", err)
+		}
 	}
 
-	// Member side: rename to ts0, assign dual-stack link addrs (so return traffic is
-	// symmetric), up, then route tailnet CIDRs via the same-family gateway bridge IP.
+	// Member side: (rename the freshly-moved end to ts0 if new), assign dual-stack link
+	// addrs (so return traffic is symmetric), up, then route tailnet CIDRs via the
+	// same-family gateway bridge IP. All Replace ops — safe to re-run on an adopted wiring.
 	gw4, gw6 := net.ParseIP(gwIP4), net.ParseIP(gwIP6)
 	addr4, err := netlink.ParseAddr(memberAddr4(info.PodIP))
 	if err != nil {
@@ -187,20 +224,29 @@ func Wire(info netinfo.PodNetInfo, gwNsPath string, routes []string, exit *ExitO
 		return err
 	}
 	return withNetNS(info.Netns, func() error {
-		// Remove a stale ts0 from a previous wiring (e.g. re-wire after gateway restart).
-		if old, e := netlink.LinkByName(podIf); e == nil {
-			_ = netlink.LinkDel(old)
-		}
-		l, err := netlink.LinkByName(memberName)
-		if err != nil {
-			return err
-		}
-		if err := netlink.LinkSetName(l, podIf); err != nil {
-			return err
-		}
-		l, err = netlink.LinkByName(podIf)
-		if err != nil {
-			return err
+		var l netlink.Link
+		if adopted {
+			// Live ts0 already present — reuse it, never delete it.
+			l, err = netlink.LinkByName(podIf)
+			if err != nil {
+				return err
+			}
+		} else {
+			// Remove a stale ts0 from a previous wiring, then rename the freshly-moved end.
+			if old, e := netlink.LinkByName(podIf); e == nil {
+				_ = netlink.LinkDel(old)
+			}
+			l, err = netlink.LinkByName(memberName)
+			if err != nil {
+				return err
+			}
+			if err := netlink.LinkSetName(l, podIf); err != nil {
+				return err
+			}
+			l, err = netlink.LinkByName(podIf)
+			if err != nil {
+				return err
+			}
 		}
 		if err := netlink.AddrReplace(l, addr4); err != nil {
 			return fmt.Errorf("member v4 addr: %w", err)

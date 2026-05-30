@@ -27,8 +27,13 @@ const (
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "ready" {
-		os.Exit(readyMain())
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "ready":
+			os.Exit(readyMain())
+		case "live":
+			os.Exit(liveMain())
+		}
 	}
 	run()
 }
@@ -37,6 +42,18 @@ func main() {
 func readyMain() int {
 	out, err := exec.Command("tailscale", "--socket="+sock, "ip", "-4").Output()
 	if err != nil || len(out) < 4 || string(out[:4]) != "100." {
+		return 1
+	}
+	return 0
+}
+
+// liveMain exits 0 while the tailscaled daemon is responsive (LocalAPI answers). It does
+// NOT gate on tailnet connectivity — a transient DERP/control blip must not restart the
+// pod (that would flap live member egress); only a wedged or dead daemon fails this.
+func liveMain() int {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := (&local.Client{Socket: sock}).Status(ctx); err != nil {
 		return 1
 	}
 	return 0
@@ -139,10 +156,12 @@ func watchConfig(ctx context.Context, lc *local.Client, path string) {
 		if h == last || h == ([32]byte{}) {
 			continue
 		}
-		last = h
+		// Commit the hash only on a successful reload; a failed reload leaves `last`
+		// unchanged so the next poll retries instead of silently dropping the new config.
 		if ok, err := lc.ReloadConfig(ctx); err != nil {
-			fmt.Fprintln(os.Stderr, "reload-config:", err)
+			fmt.Fprintln(os.Stderr, "reload-config (will retry):", err)
 		} else {
+			last = h
 			fmt.Println("tailgate-gateway: config changed, reloaded (applied:", ok, ")")
 		}
 	}
