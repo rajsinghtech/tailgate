@@ -63,7 +63,9 @@ func TestMagicDNSThroughGateway(t *testing.T) {
 	waitGatewayReady(t, ctx, cs, name)
 
 	member := runPodQuad100(t, ctx, cs, "dns-member", map[string]string{"egress": name})
-	t.Cleanup(func() { _ = cs.CoreV1().Pods("default").Delete(context.Background(), member, *metav1.NewDeleteOptions(0)) })
+	t.Cleanup(func() {
+		_ = cs.CoreV1().Pods("default").Delete(context.Background(), member, *metav1.NewDeleteOptions(0))
+	})
 
 	// 4. resolve+reach the peer BY NAME through the gateway (retry for tunnel/DNS warmup).
 	if err := wait.PollUntilContextTimeout(ctx, 4*time.Second, 120*time.Second, true, func(ctx context.Context) (bool, error) {

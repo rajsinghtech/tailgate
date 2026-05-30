@@ -38,8 +38,8 @@ func renderGatewayConfig(eg *egressv1.EgressGroup) ([]byte, error) {
 		AuthKey:  &authKeyRef,
 		Hostname: &hostname,
 
-		AcceptDNS:    opt.NewBool(true),                 // FORCED ON — MagicDNS + split-DNS
-		AcceptRoutes: opt.NewBool(acceptRoutes(eg)),     // subnet-router + app-connector routes
+		AcceptDNS:     opt.NewBool(true),             // FORCED ON — MagicDNS + split-DNS
+		AcceptRoutes:  opt.NewBool(acceptRoutes(eg)), // subnet-router + app-connector routes
 		NetfilterMode: &netfilter,
 	}
 

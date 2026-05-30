@@ -44,7 +44,8 @@ func matchGroup(pod *corev1.Pod, nsLabels map[string]string, groups []egressv1.E
 // fd7a:115c:a1e0::/48) are always included; advertised subnet CIDRs are added for
 // mode=subnet. v6 CIDRs are routed even on a v4-only cluster — the veth link is dual-stack.
 func routeSet(g *egressv1.EgressGroup) []string {
-	out := []string{"100.64.0.0/10", "fd7a:115c:a1e0::/48"}
+	out := make([]string, 0, 2+len(g.Spec.Routes))
+	out = append(out, "100.64.0.0/10", "fd7a:115c:a1e0::/48")
 	out = append(out, g.Spec.Routes...)
 	return out
 }

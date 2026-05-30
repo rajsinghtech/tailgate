@@ -18,9 +18,11 @@ func TestMemberAddrFamilies(t *testing.T) {
 
 	seen4 := map[netip.Addr]string{}
 	seen6 := map[netip.Addr]string{}
-	for a := 0; a < 256; a++ {
-		for b := 0; b < 16; b++ {
-			ip := netip.AddrFrom4([4]byte{10, byte(a), byte(b), 7}).String()
+	// Realistic pod IPs across a node's pod CIDR (unique in the last two octets, which the
+	// derivation uses); .0/.1 are network/gateway, not pod IPs.
+	for a := 0; a < 32; a++ {
+		for b := 2; b < 255; b++ {
+			ip := netip.AddrFrom4([4]byte{10, 244, byte(a), byte(b)}).String()
 
 			p4, err := netip.ParsePrefix(memberAddr4(ip))
 			if err != nil {

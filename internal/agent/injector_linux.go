@@ -38,23 +38,34 @@ func hostVethNames(podIP string) (member, gw string) {
 	return "tgm" + s, "tgg" + s
 }
 
-// memberAddr4 derives a stable /16 link-local v4 address for the member's ts0.
+// memberAddr4 derives a stable /16 link address for the member's ts0. For a v4 pod IP it
+// uses the pod IP's last two octets, which are unique across a node's pod CIDR — so members
+// sharing a gateway never collide (a hash-into-/16 would birthday-collide). Falls back to a
+// hash for v6-only pods.
 func memberAddr4(podIP string) string {
-	h := podHash(podIP)
-	b2 := byte(h>>8) % 254 // 0..253
-	b3 := byte(h) % 254
-	if b2 == 0 {
-		b2 = 1
-	}
-	if b3 == 0 {
-		b3 = 2 // skip .0.1 (gateway); any non-1 is fine, and b2>=1 already avoids .0.x
+	b2, b3 := addrOctets(podIP)
+	if b2 == 0 && b3 <= 1 {
+		b3 = 2 // avoid 169.254.0.0 and .0.1 (the gateway bridge)
 	}
 	return fmt.Sprintf("169.254.%d.%d/16", b2, b3)
 }
 
-// memberAddr6 derives a stable /64 v6 address for the member's ts0 (>=::1:0000 so never ::1).
+// memberAddr6 derives the matching /64 link address (host = 1:<two octets>, never ::1).
 func memberAddr6(podIP string) string {
-	return fmt.Sprintf("fd96:7467::%x:%x/64", 1+(podHash(podIP)>>16), uint16(podHash(podIP))|1)
+	b2, b3 := addrOctets(podIP)
+	return fmt.Sprintf("fd96:7467::1:%x/64", uint16(b2)<<8|uint16(b3))
+}
+
+// addrOctets returns the last two octets of a v4 pod IP (unique per node), or two hash bytes
+// for a non-v4 (v6-only) pod IP.
+func addrOctets(podIP string) (byte, byte) {
+	if ip := net.ParseIP(podIP); ip != nil {
+		if v4 := ip.To4(); v4 != nil {
+			return v4[2], v4[3]
+		}
+	}
+	h := podHash(podIP)
+	return byte(h >> 8), byte(h)
 }
 
 func withNetNS(path string, fn func() error) error {

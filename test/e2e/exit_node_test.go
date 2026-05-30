@@ -225,4 +225,3 @@ func startExitNodePod(t *testing.T, ctx context.Context, cfg *rest.Config, cs *k
 	}), "exit node tailnet IP")
 	return cgnat, podIP
 }
-
