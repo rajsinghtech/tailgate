@@ -18,11 +18,11 @@ nodes — without giving every pod its own `tailscaled`. Each `EgressGroup` gets
 tailscaled gateway**; a node agent veth-stitches member pods into that gateway's network namespace.
 The tailnet sees `O(groups)` devices, not `O(pods)`.
 
-- **One device per group, not per pod** — scale a workload from 3 to 3,000 pods and the tailnet gains **zero** new nodes. Pod churn never registers or de-registers a device.
-- **Native L3 egress** — the gateway is a kernel-TUN `tailscaled`, so members get whole-CIDR, all-protocol egress (TCP/UDP/ICMP/…), not a TCP/UDP socket proxy.
+- **One device per group, not per pod** — scale a workload from 3 to 3,000 pods and the tailnet gains no new nodes for that group. Member pod churn never adds or removes gateway devices from the tailnet.
+- **Native L3 egress** — the gateway is a kernel-TUN `tailscaled`, so members get whole-CIDR, all-protocol egress (TCP/UDP/ICMP/…) at the network layer, rather than redirecting traffic through an application-level socket proxy.
 - **Reach everything the tailnet exposes** — CGNAT peers (`100.64.0.0/10` + the IPv6 ULA), advertised subnet-router CIDRs, app-connector ranges, and full-tunnel through a chosen exit node.
-- **IPv6 / dual-stack** — the pod↔gateway veth is always dual-stack, so members reach peers over both their CGNAT v4 and ULA v6 regardless of the cluster's own IP family.
-- **Live reconcile, no pod flap** — change `acceptRoutes`, swap the `exitNode`, or adjust DNS on a running group and the gateway hot-reloads its config in place. Member tunnels never break.
+- **IPv6 / dual-stack** — the pod↔gateway veth is dual-stack, enabling members to reach peers over both their CGNAT v4 and ULA v6 regardless of the cluster's own IP family.
+- **Live reconcile, no pod flap** — change `acceptRoutes`, swap the `exitNode`, or adjust DNS on a running group and the gateway hot-reloads its config in place, keeping member tunnels up through the reconcile.
 - **MagicDNS** — members point at `100.100.100.100` and resolve peers' `*.ts.net` names through the shared gateway's resolver.
 - **No Multus, no Spiderpool, no second NIC** — the default `routed` attach is a single chained route-only CNI plugin that injects tailnet routes onto each member pod's existing `eth0`.
 
@@ -70,7 +70,7 @@ Three binaries make up the system (all published to `ghcr.io/rajsinghtech/`):
 - **`tailgate-gateway`** (per-group DaemonSet, privileged) — the *one shared tailnet node* for the group. It runs the official `tailscale/tailscale` image's `tailscaled` in kernel-TUN mode inside its **own** pod netns (not `hostNetwork`, so each group's `tailscale0` is isolated and the agent can stitch member veths in). It enables IP forwarding, MASQUERADEs forwarded member traffic onto `tailscale0` (SNAT to the group's tag), and `fwmark`s member traffic into a policy table whose default routes through `tailscale0` — so `tailscaled` routes each destination per its netmap (CGNAT peer, accepted subnet/app-connector CIDR, or the exit node for `0.0.0.0/0`). It watches the config file and calls LocalAPI `ReloadConfig` on change — **no restart**. Node-local so a member always has a same-node gateway to wire to; persisted state keeps the node identity stable across restarts.
 - **`tailgate-agent`** (DaemonSet, privileged + `hostPID` + `hostNetwork`) — self-installs the chained route-only CNI plugin (`tailgate-cni`) into the node's conflist, then watches Pods and `EgressGroup`s. For each pod a group selects, it veth-stitches the pod into that node's group gateway netns and injects the tailnet routes (`100.64.0.0/10`, the ULA, and `spec.routes`) toward the gateway. Selection is *data* (an informer), not network plumbing — there is no per-pod annotation or NAD to manage.
 
-Why this shape: the operator/ProxyGroup egress path destroys the pod's source identity and can't do 4via6; a subnet router holds a WireGuard peer for every node its ACL reaches and melts at large-tailnet scale; per-pod `tailscaled` explodes the device count and churns control. `tailgate` keeps a small, fixed set of gateway devices (`O(groups)`), bounded by group rather than tailnet, while still giving members native whole-CIDR L3. See [DESIGN.md](DESIGN.md) for the full datapath analysis.
+Why this shape: tailgate groups pods behind a shared gateway to keep the device count `O(groups)` rather than `O(pods)`, bounding growth by workload count instead of pod count, and each per-group gateway preserves the group's tag as the source identity for all member traffic. Other egress paths make different tradeoffs: the operator's ProxyGroup egress offers centralized control but does not preserve each pod's individual source identity on the tailnet and does not support 4via6; a subnet router holds a WireGuard peer for every node its ACL reaches, which can become a scaling constraint in large tailnets; per-pod `tailscaled` preserves identity but grows the device count and control-plane churn with pod count. `tailgate` keeps a small, fixed set of gateway devices (`O(groups)`), bounded by group rather than tailnet, while still giving members native whole-CIDR L3.
 
 ## Install
 
@@ -187,7 +187,7 @@ the `EgressGroup` spec. Change the spec and the operator re-renders the ConfigMa
 entrypoint watches the file (by content hash) and calls LocalAPI `ReloadConfig`. `tailscaled`
 re-applies its prefs **in place** — same pod, same node identity, `restartCount` unchanged.
 
-That means these are all live edits that **never break member tunnels**:
+That means these are all live edits that reload the gateway config in place, avoiding a pod restart:
 
 ```bash
 # add a subnet-router range
@@ -202,8 +202,8 @@ kubectl patch eg payments --type=merge -p '{"spec":{"acceptRoutes":false}}'
 ```
 
 `cidr` / `exit-node` / `dns` changes re-render the config and reload prefs without flapping the pod,
-so traffic in flight survives the reconcile. This is the production-resilience guarantee: editing a
-group's reachability is not a restart. (Because tags ride on the authkey rather than the config,
+so traffic in flight survives the reconcile. When the config reloads successfully, editing a
+group's reachability avoids a pod restart. (Because tags ride on the authkey rather than the config,
 they're deliberately *not* a hot-reload field.)
 
 ## Egress modes
@@ -216,7 +216,7 @@ they're deliberately *not* a hot-reload field.)
 `spec.exitNode` is orthogonal to `mode`: set it (in any mode) to push `0.0.0.0/0` + `::/0` onto
 members through the chosen exit node. The full-tunnel default route lives in a dedicated policy table
 (never the pod's `main` table), and the agent keeps `TAILGATE_CLUSTER_CIDRS` on the primary CNI so
-kube-DNS and the API server stay reachable. The gateway *uses* an exit node; it never advertises
+kube-DNS and the API server stay reachable. The gateway *uses* an exit node; it does not advertise
 itself as one.
 
 `spec.datapath` defaults to `kernel` (the full-fat client: userspace WireGuard + a kernel TUN device,
@@ -262,8 +262,8 @@ tailnet:
 | `TestConfigReconcileNoRestart` | flipping `acceptRoutes` + selecting an `exitNode` on a running group reloads prefs with the gateway pod unchanged (same UID, `restartCount=0`) |
 | `TestRenderGatewayConfigRoundTrips` | the rendered `tailscaled.json` round-trips through the real `conffile.Load` |
 
-Policy throughout the e2e is expressed with **grants** (`{src, dst, ip}`, plus grants-`via` for
-routing through a specific tagged node), not legacy `acls`.
+Policy throughout the e2e is expressed using the **grants** field in the policy file (`{src, dst, ip}`,
+plus grants-`via` for routing through a specific tagged node).
 
 ## License
 
