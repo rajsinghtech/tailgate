@@ -11,26 +11,21 @@ type EgressSelector struct {
 }
 
 // ExitNodeRef selects a tailnet exit node to route all member egress through. The
-// gateway is a client that USES an exit node; it never offers itself as one. Pin one with
-// NodeID, or let the operator pick with Auto (optionally narrowed by Tag/Region) and
-// re-resolve on failover.
+// gateway is a client that USES an exit node; it never offers itself as one. The surface
+// mirrors the native `tailscale set --exit-node`: pin a node, or say "auto".
 type ExitNodeRef struct {
-	// NodeID pins a specific exit node (its MagicDNS name, StableID, or tailnet IP).
+	// Name selects the exit node using the same value space as the native
+	// `tailscale set --exit-node`: a tailnet IP, a MagicDNS name, a StableNodeID,
+	// or "auto" / "auto:any" to let an eligible exit node be picked automatically.
+	// Empty clears the exit node. (The declarative tailscaled config cannot carry
+	// "auto", so for "auto" the operator resolves a concrete node and re-resolves on
+	// a periodic requeue for failover; an explicit ref is passed through verbatim.)
 	// +optional
-	NodeID string `json:"nodeID,omitempty"`
-	// Auto lets the operator pick any eligible exit node (one advertising 0.0.0.0/0 + ::/0),
-	// narrowed by Tag/Region if set, resolving to a concrete node and re-resolving on failover.
-	// +optional
-	Auto bool `json:"auto,omitempty"`
-	// Tag restricts auto-selection to exit nodes carrying this tailnet tag (e.g. tag:exit-eu).
-	// +optional
-	Tag string `json:"tag,omitempty"`
-	// Region restricts auto-selection to exit nodes tagged tag:exit-<region> (a location
-	// convention, since the device API carries no location field), e.g. region "de".
-	// +optional
-	Region string `json:"region,omitempty"`
-	// AllowLANAccess keeps direct LAN/cluster reachability while the exit node carries
-	// the default route.
+	Name string `json:"name,omitempty"`
+	// AllowLANAccess keeps the member's direct LAN/cluster reachability while the exit
+	// node carries the default route. It is a property of the exit-node *client* (the
+	// gateway), mapping to tailscaled's AllowLANWhileUsingExitNode
+	// (== `tailscale up --exit-node-allow-lan-access`).
 	// +optional
 	AllowLANAccess bool `json:"allowLANAccess,omitempty"`
 }

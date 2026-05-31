@@ -92,26 +92,19 @@ spec:
                 properties:
                   allowLANAccess:
                     description: |-
-                      AllowLANAccess keeps direct LAN/cluster reachability while the exit node carries
-                      the default route.
+                      AllowLANAccess keeps the member's direct LAN/cluster reachability while the exit
+                      node carries the default route. It is a property of the exit-node *client* (the
+                      gateway), mapping to tailscaled's AllowLANWhileUsingExitNode
+                      (== `tailscale up --exit-node-allow-lan-access`).
                     type: boolean
-                  auto:
+                  name:
                     description: |-
-                      Auto lets the operator pick any eligible exit node (one advertising 0.0.0.0/0 + ::/0),
-                      narrowed by Tag/Region if set, resolving to a concrete node and re-resolving on failover.
-                    type: boolean
-                  nodeID:
-                    description: NodeID pins a specific exit node (its MagicDNS name,
-                      StableID, or tailnet IP).
-                    type: string
-                  region:
-                    description: |-
-                      Region restricts auto-selection to exit nodes tagged tag:exit-<region> (a location
-                      convention, since the device API carries no location field), e.g. region "de".
-                    type: string
-                  tag:
-                    description: Tag restricts auto-selection to exit nodes carrying
-                      this tailnet tag (e.g. tag:exit-eu).
+                      Name selects the exit node using the same value space as the native
+                      `tailscale set --exit-node`: a tailnet IP, a MagicDNS name, a StableNodeID,
+                      or "auto" / "auto:any" to let an eligible exit node be picked automatically.
+                      Empty clears the exit node. (The declarative tailscaled config cannot carry
+                      "auto", so for "auto" the operator resolves a concrete node and re-resolves on
+                      a periodic requeue for failover; an explicit ref is passed through verbatim.)
                     type: string
                 type: object
               mirrorRoutes:

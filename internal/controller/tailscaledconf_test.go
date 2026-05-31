@@ -14,7 +14,7 @@ import (
 
 func exitID(eg *egressv1.EgressGroup) string {
 	if eg.Spec.ExitNode != nil {
-		return eg.Spec.ExitNode.NodeID
+		return eg.Spec.ExitNode.Name
 	}
 	return ""
 }
@@ -35,7 +35,7 @@ func TestRenderGatewayConfigRoundTrips(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: "gamma"},
 			Spec: egressv1.EgressGroupSpec{
 				AcceptRoutes: &tt,
-				ExitNode:     &egressv1.ExitNodeRef{NodeID: "exit-1.tail1234.ts.net", AllowLANAccess: true},
+				ExitNode:     &egressv1.ExitNodeRef{Name: "exit-1.tail1234.ts.net", AllowLANAccess: true},
 			},
 		},
 	}
@@ -72,8 +72,8 @@ func TestRenderGatewayConfigRoundTrips(t *testing.T) {
 			}
 			// Exit node round-trips when set.
 			if eg.Spec.ExitNode != nil {
-				if c.Parsed.ExitNode == nil || *c.Parsed.ExitNode != eg.Spec.ExitNode.NodeID {
-					t.Errorf("exitNode = %v, want %s", c.Parsed.ExitNode, eg.Spec.ExitNode.NodeID)
+				if c.Parsed.ExitNode == nil || *c.Parsed.ExitNode != eg.Spec.ExitNode.Name {
+					t.Errorf("exitNode = %v, want %s", c.Parsed.ExitNode, eg.Spec.ExitNode.Name)
 				}
 				if !c.Parsed.AllowLANWhileUsingExitNode.EqualBool(true) {
 					t.Errorf("allowLANWhileUsingExitNode = %q, want true", c.Parsed.AllowLANWhileUsingExitNode)

@@ -65,7 +65,7 @@ func TestExitNodeFullTunnel(t *testing.T) {
 	must(t, kc.Create(ctx, &egressv1.EgressGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: egressv1.EgressGroupSpec{
-			ExitNode: &egressv1.ExitNodeRef{NodeID: exitCGNAT, AllowLANAccess: false},
+			ExitNode: &egressv1.ExitNodeRef{Name: exitCGNAT, AllowLANAccess: false},
 			Selector: egressv1.EgressSelector{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"egress": name}}},
 		},
 	}), "create egressgroup")

@@ -83,32 +83,39 @@ func (r *EgressGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 	l.Info("reconciled", "group", eg.Name)
 	// Re-resolve an auto-selected exit node periodically so a node going offline fails over.
-	if en := eg.Spec.ExitNode; en != nil && en.NodeID == "" && (en.Auto || en.Tag != "" || en.Region != "") {
+	if en := eg.Spec.ExitNode; en != nil && isAutoExitNode(en.Name) {
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	}
 	return ctrl.Result{}, nil
 }
 
-// effectiveExitNode is the concrete exit node to pin: a static NodeID verbatim, or — for an
-// auto/tag/region selector — one the operator resolves from the tailnet. Resolution failure
-// is logged and yields "" (no exit node) rather than failing the whole reconcile.
+// effectiveExitNode is the concrete exit node to pin. It mirrors the native --exit-node value
+// space: an explicit ref (IP / MagicDNS name / StableID) is echoed verbatim, while "auto" is
+// resolved to a concrete node from the tailnet (the declarative config can't carry "auto").
+// Resolution failure is logged and yields "" rather than failing the whole reconcile.
 func (r *EgressGroupReconciler) effectiveExitNode(ctx context.Context, eg *egressv1.EgressGroup, l logr.Logger) string {
 	en := eg.Spec.ExitNode
-	if en == nil {
+	if en == nil || en.Name == "" {
 		return ""
 	}
-	if en.NodeID != "" {
-		return en.NodeID
+	if !isAutoExitNode(en.Name) {
+		return en.Name // explicit ref, passed through like `tailscale set --exit-node=<ref>`
 	}
-	if r.TS == nil || (!en.Auto && en.Tag == "" && en.Region == "") {
+	if r.TS == nil {
 		return ""
 	}
-	id, err := r.TS.ResolveExitNode(ctx, en.Tag, en.Region)
+	id, err := r.TS.ResolveExitNode(ctx)
 	if err != nil {
-		l.Info("exit-node auto-selection found no candidate", "group", eg.Name, "tag", en.Tag, "region", en.Region, "err", err.Error())
+		l.Info("exit-node auto-selection found no candidate", "group", eg.Name, "err", err.Error())
 		return ""
 	}
 	return id
+}
+
+// isAutoExitNode reports whether name is the native auto expression ("auto" / "auto:any" / any
+// "auto:" prefix), matching how tailscaled's ParseAutoExitNodeString treats the value.
+func isAutoExitNode(name string) bool {
+	return name == "auto" || strings.HasPrefix(name, "auto:")
 }
 
 // applyOwned create-or-updates obj with eg as controller owner (for GC).

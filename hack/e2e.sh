@@ -34,7 +34,7 @@ ARCH="${ARCH:-arm64}" bash hack/build.sh "$TAG" "$CLUSTER"
 echo ">> [$FAMILY] installing CRD + manifests"
 # --validate=false: on a v6-only kind cluster the client-side openapi fetch can fail over
 # the [::1] loopback on Docker Desktop; the apply itself is fine.
-kubectl apply --validate=false -f config/crd/egress.tailgate.dev_egressgroups.yaml
+kubectl apply --validate=false -f config/crd/tailscale.rajsingh.info_egressgroups.yaml
 # pin the just-built tag into a temp copy of the manifest
 tmp="$(mktemp)"
 sed -E "s/tailgate-(operator|agent|gateway):[A-Za-z0-9._-]+/tailgate-\1:${TAG}/g" deploy/manifests/tailgate.yaml > "$tmp"
