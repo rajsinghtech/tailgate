@@ -67,6 +67,15 @@ app.kubernetes.io/component: agent
 {{- end }}
 
 {{/*
+Agent DaemonSet name. The agent is a sibling component of the operator (it is not part of
+it), so it is named "tailgate-agent" rather than "<operator-fullname>-agent". Override with
+agent.nameOverride.
+*/}}
+{{- define "tailgate-operator.agentName" -}}
+{{- default "tailgate-agent" .Values.agent.nameOverride | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
 Create the name of the service account to use
 */}}
 {{- define "tailgate-operator.serviceAccountName" -}}

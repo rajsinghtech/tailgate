@@ -37,6 +37,9 @@ operator:
 agent:
   # -- Deploy the per-node agent DaemonSet
   enabled: true
+  # -- Agent DaemonSet name. Defaults to "tailgate-agent" (a sibling of the operator, not
+  # named after it). Set to override.
+  nameOverride: ""
   image:
     # -- Agent container image repository (bundles tailgate-cni)
     repository: ghcr.io/rajsinghtech/tailgate-agent

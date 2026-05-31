@@ -2,7 +2,7 @@
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: {{ include "tailgate-operator.fullname" . }}-agent
+  name: {{ include "tailgate-operator.agentName" . }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "tailgate-operator.labels" . | nindent 4 }}
