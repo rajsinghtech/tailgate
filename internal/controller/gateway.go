@@ -32,8 +32,8 @@ func gatewayConfigName(group string) string { return "tailgate-gw-" + group + "-
 
 // gatewayConfigMap renders the declarative tailscaled config for a group into a
 // ConfigMap the gateway mounts (and watches for hot-reload).
-func gatewayConfigMap(eg *egressv1.EgressGroup, ns string) (*corev1.ConfigMap, error) {
-	conf, err := renderGatewayConfig(eg)
+func gatewayConfigMap(eg *egressv1.EgressGroup, ns, exitNodeID string) (*corev1.ConfigMap, error) {
+	conf, err := renderGatewayConfig(eg, exitNodeID)
 	if err != nil {
 		return nil, err
 	}

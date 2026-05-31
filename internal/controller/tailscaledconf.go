@@ -26,7 +26,7 @@ const (
 // is core to egress and required by app connectors). Tags are NOT a config field — they
 // ride on the authkey (minted with tags by tsclient) — so they must stay out of here or
 // conffile's DisallowUnknownFields rejects the file.
-func renderGatewayConfig(eg *egressv1.EgressGroup) ([]byte, error) {
+func renderGatewayConfig(eg *egressv1.EgressGroup, exitNodeID string) ([]byte, error) {
 	authKeyRef := "file:" + gwAuthKeyPath
 	hostname := gatewayName(eg.Name)
 	netfilter := "off" // we own MASQUERADE + forwarding; keep tailscaled out of netfilter
@@ -43,9 +43,8 @@ func renderGatewayConfig(eg *egressv1.EgressGroup) ([]byte, error) {
 		NetfilterMode: &netfilter,
 	}
 
-	if en := eg.Spec.ExitNode; en != nil && en.NodeID != "" {
-		id := en.NodeID
-		cfg.ExitNode = &id
+	if en := eg.Spec.ExitNode; en != nil && exitNodeID != "" {
+		cfg.ExitNode = &exitNodeID
 		cfg.AllowLANWhileUsingExitNode = opt.NewBool(en.AllowLANAccess)
 	}
 

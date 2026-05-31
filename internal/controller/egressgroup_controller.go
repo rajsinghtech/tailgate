@@ -3,7 +3,9 @@ package controller
 import (
 	"context"
 	"strings"
+	"time"
 
+	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -61,7 +63,8 @@ func (r *EgressGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err := r.ensureAuthKeySecret(ctx, &eg); err != nil {
 		return ctrl.Result{}, err
 	}
-	cm, err := gatewayConfigMap(&eg, r.Namespace)
+	exitNodeID := r.effectiveExitNode(ctx, &eg, l)
+	cm, err := gatewayConfigMap(&eg, r.Namespace, exitNodeID)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -74,11 +77,38 @@ func (r *EgressGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	eg.Status.GatewayHostname = gatewayName(eg.Name)
 	eg.Status.AdvertisedRoutes = strings.Join(eg.Spec.Routes, ",")
+	eg.Status.ResolvedExitNode = exitNodeID
 	if err := r.Status().Update(ctx, &eg); err != nil {
 		return ctrl.Result{}, err
 	}
 	l.Info("reconciled", "group", eg.Name)
+	// Re-resolve an auto-selected exit node periodically so a node going offline fails over.
+	if en := eg.Spec.ExitNode; en != nil && en.NodeID == "" && (en.Auto || en.Tag != "" || en.Region != "") {
+		return ctrl.Result{RequeueAfter: time.Minute}, nil
+	}
 	return ctrl.Result{}, nil
+}
+
+// effectiveExitNode is the concrete exit node to pin: a static NodeID verbatim, or — for an
+// auto/tag/region selector — one the operator resolves from the tailnet. Resolution failure
+// is logged and yields "" (no exit node) rather than failing the whole reconcile.
+func (r *EgressGroupReconciler) effectiveExitNode(ctx context.Context, eg *egressv1.EgressGroup, l logr.Logger) string {
+	en := eg.Spec.ExitNode
+	if en == nil {
+		return ""
+	}
+	if en.NodeID != "" {
+		return en.NodeID
+	}
+	if r.TS == nil || (!en.Auto && en.Tag == "" && en.Region == "") {
+		return ""
+	}
+	id, err := r.TS.ResolveExitNode(ctx, en.Tag, en.Region)
+	if err != nil {
+		l.Info("exit-node auto-selection found no candidate", "group", eg.Name, "tag", en.Tag, "region", en.Region, "err", err.Error())
+		return ""
+	}
+	return id
 }
 
 // applyOwned create-or-updates obj with eg as controller owner (for GC).

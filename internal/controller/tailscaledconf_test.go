@@ -12,6 +12,13 @@ import (
 	egressv1 "github.com/rajsinghtech/tailgate/api/v1alpha1"
 )
 
+func exitID(eg *egressv1.EgressGroup) string {
+	if eg.Spec.ExitNode != nil {
+		return eg.Spec.ExitNode.NodeID
+	}
+	return ""
+}
+
 // The rendered config must parse via the real conffile loader — which validates the
 // "alpha0" version and rejects unknown fields (DisallowUnknownFields). This catches any
 // field-name/casing drift or an accidental tags field before it ever hits a gateway.
@@ -35,7 +42,7 @@ func TestRenderGatewayConfigRoundTrips(t *testing.T) {
 
 	for name, eg := range cases {
 		t.Run(name, func(t *testing.T) {
-			b, err := renderGatewayConfig(eg)
+			b, err := renderGatewayConfig(eg, exitID(eg))
 			if err != nil {
 				t.Fatalf("render: %v", err)
 			}
