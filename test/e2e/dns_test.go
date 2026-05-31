@@ -19,21 +19,15 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	egressv1 "github.com/rajsinghtech/tailgate/api/v1alpha1"
-	"github.com/rajsinghtech/tailgate/internal/tailnet"
 )
 
 func TestMagicDNSThroughGateway(t *testing.T) {
-	loadEnv()
-	orgID, orgSec := getOrgCreds()
-	if orgID == "" || orgSec == "" {
-		t.Skip("TS_ORG_OAUTH_CLIENT_ID/SECRET not set (code/.env) — skipping e2e")
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	cfg, cs, kc := clients(t)
 
 	// 1. tailnet (MagicDNS on by default) + operator pointed at it.
-	tn := tailnet.New(orgID, orgSec)
+	tn := newTailnetClient(t)
 	eg, err := tn.Create(ctx, "tailgate-dns-"+time.Now().UTC().Format("150405"))
 	must(t, err, "create tailnet")
 	t.Cleanup(func() { _ = eg.Close(context.Background()) })

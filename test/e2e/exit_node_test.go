@@ -25,21 +25,15 @@ import (
 	"k8s.io/client-go/rest"
 
 	egressv1 "github.com/rajsinghtech/tailgate/api/v1alpha1"
-	"github.com/rajsinghtech/tailgate/internal/tailnet"
 )
 
 func TestExitNodeFullTunnel(t *testing.T) {
-	loadEnv()
-	orgID, orgSec := getOrgCreds()
-	if orgID == "" || orgSec == "" {
-		t.Skip("TS_ORG_OAUTH_CLIENT_ID/SECRET not set (code/.env) — skipping e2e")
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	cfg, cs, kc := clients(t)
 
 	// 1. tailnet with autoApprovers.exitNode so the exit node's 0/0 advertisement auto-approves.
-	tn := tailnet.New(orgID, orgSec)
+	tn := newTailnetClient(t)
 	eg, err := tn.Create(ctx, "tailgate-exit-"+time.Now().UTC().Format("150405"))
 	must(t, err, "create tailnet")
 	t.Cleanup(func() { _ = eg.Close(context.Background()) })

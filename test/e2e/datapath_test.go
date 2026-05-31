@@ -65,11 +65,6 @@ func loadEnv() {
 }
 
 func TestEgressDatapath(t *testing.T) {
-	loadEnv()
-	orgID, orgSec := os.Getenv("TS_ORG_OAUTH_CLIENT_ID"), os.Getenv("TS_ORG_OAUTH_CLIENT_SECRET")
-	if orgID == "" || orgSec == "" {
-		t.Skip("TS_ORG_OAUTH_CLIENT_ID/SECRET not set (code/.env) — skipping e2e")
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 
@@ -85,7 +80,7 @@ func TestEgressDatapath(t *testing.T) {
 	must(t, err, "ctrl client")
 
 	// 1. ephemeral tailnet (deleted at the end).
-	tn := tailnet.New(orgID, orgSec)
+	tn := newTailnetClient(t)
 	eg, err := tn.Create(ctx, "tailgate-e2e-go-"+time.Now().UTC().Format("150405"))
 	must(t, err, "create tailnet")
 	t.Logf("ephemeral tailnet %s (dnsName=%s)", eg.DisplayName, eg.DNSName)

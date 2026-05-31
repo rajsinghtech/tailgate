@@ -10,7 +10,6 @@ package e2e
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -26,15 +25,9 @@ import (
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	egressv1 "github.com/rajsinghtech/tailgate/api/v1alpha1"
-	"github.com/rajsinghtech/tailgate/internal/tailnet"
 )
 
 func TestAgentRestartNoReWire(t *testing.T) {
-	loadEnv()
-	orgID, orgSec := os.Getenv("TS_ORG_OAUTH_CLIENT_ID"), os.Getenv("TS_ORG_OAUTH_CLIENT_SECRET")
-	if orgID == "" || orgSec == "" {
-		t.Skip("TS_ORG_OAUTH_CLIENT_ID/SECRET not set (code/.env) — skipping e2e")
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 
@@ -49,7 +42,7 @@ func TestAgentRestartNoReWire(t *testing.T) {
 	kc, err := ctrlclient.New(cfg, ctrlclient.Options{Scheme: scheme})
 	must(t, err, "ctrl client")
 
-	tn := tailnet.New(orgID, orgSec)
+	tn := newTailnetClient(t)
 	eg, err := tn.Create(ctx, "tailgate-e2e-restart-"+time.Now().UTC().Format("150405"))
 	must(t, err, "create tailnet")
 	t.Logf("ephemeral tailnet %s", eg.DNSName)
@@ -78,7 +71,9 @@ func TestAgentRestartNoReWire(t *testing.T) {
 
 	waitGatewayReady(t, ctx, cs, "e2e")
 	member := runPod(t, ctx, cs, "e2e-restart-member", map[string]string{"egress": "e2e"})
-	t.Cleanup(func() { _ = cs.CoreV1().Pods("default").Delete(context.Background(), member, *metav1.NewDeleteOptions(0)) })
+	t.Cleanup(func() {
+		_ = cs.CoreV1().Pods("default").Delete(context.Background(), member, *metav1.NewDeleteOptions(0))
+	})
 
 	curlOK := func() bool {
 		out, _, _ := execPod(ctx, cfg, cs, member, []string{"curl", "-sS", "-m", "6", "http://" + peerV4 + "/"})

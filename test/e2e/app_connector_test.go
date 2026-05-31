@@ -31,24 +31,18 @@ import (
 	"tailscale.com/tsnet"
 
 	egressv1 "github.com/rajsinghtech/tailgate/api/v1alpha1"
-	"github.com/rajsinghtech/tailgate/internal/tailnet"
 )
 
 const githubCIDR = "140.82.112.0/20" // GitHub's published range (github.com lives here)
 const githubIP = "140.82.112.3"      // a representative IP inside it
 
 func TestAppConnectorReachability(t *testing.T) {
-	loadEnv()
-	orgID, orgSec := getOrgCreds()
-	if orgID == "" || orgSec == "" {
-		t.Skip("TS_ORG_OAUTH_CLIENT_ID/SECRET not set (code/.env) — skipping e2e")
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	cfg, cs, kc := clients(t)
 
 	// 1. tailnet with an app-connector grant for github.com + autoApprovers for its route.
-	tn := tailnet.New(orgID, orgSec)
+	tn := newTailnetClient(t)
 	eg, err := tn.Create(ctx, "tailgate-appc-"+time.Now().UTC().Format("150405"))
 	must(t, err, "create tailnet")
 	t.Cleanup(func() { _ = eg.Close(context.Background()) })
