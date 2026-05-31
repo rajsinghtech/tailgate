@@ -28,9 +28,10 @@ import (
 
 const apiBase = "https://api.tailscale.com/api/v2"
 
-// Client holds the org-level OAuth credentials used to create tailnets.
+// Client holds the org-level credentials used to create tailnets.
 type Client struct {
 	orgID, orgSecret string
+	accessToken      string // pre-obtained org access token (WIF/OIDC); bypasses client_credentials
 	hc               *http.Client
 }
 
@@ -38,6 +39,23 @@ type Client struct {
 // the tailnet-create capability.
 func New(orgClientID, orgSecret string) *Client {
 	return &Client{orgID: orgClientID, orgSecret: orgSecret, hc: &http.Client{Timeout: 30 * time.Second}}
+}
+
+// NewFromAccessToken returns a Client authenticated by a pre-obtained org-level access
+// token (e.g. minted via a GitHub OIDC token-exchange / Workload Identity Federation),
+// instead of client_credentials — so CI needs no long-lived org secret.
+func NewFromAccessToken(token string) *Client {
+	return &Client{accessToken: token, hc: &http.Client{Timeout: 30 * time.Second}}
+}
+
+// orgToken returns the org-level bearer: the pre-obtained WIF access token if present,
+// else a freshly minted client_credentials token. (Child-tailnet ops keep using their
+// own oauthClient via childToken.)
+func (c *Client) orgToken(ctx context.Context) (string, error) {
+	if c.accessToken != "" {
+		return c.accessToken, nil
+	}
+	return c.oauthToken(ctx, c.orgID, c.orgSecret)
 }
 
 // Ephemeral is a throwaway tailnet. Close() deletes it. ClientID/ClientSecret are
@@ -88,7 +106,7 @@ func (c *Client) oauthToken(ctx context.Context, clientID, secret string) (strin
 
 // Create provisions a fresh tailnet. name must match ^[a-zA-Z0-9' -]+$.
 func (c *Client) Create(ctx context.Context, name string) (*Ephemeral, error) {
-	tok, err := c.oauthToken(ctx, c.orgID, c.orgSecret)
+	tok, err := c.orgToken(ctx)
 	if err != nil {
 		return nil, err
 	}

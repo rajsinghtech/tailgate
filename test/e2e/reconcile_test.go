@@ -224,6 +224,22 @@ func getOrgCreds() (string, string) {
 	return os.Getenv("TS_ORG_OAUTH_CLIENT_ID"), os.Getenv("TS_ORG_OAUTH_CLIENT_SECRET")
 }
 
+// newTailnetClient builds the org tailnet client for the e2e, preferring a WIF access token
+// (TS_API_ACCESS_TOKEN, minted from the GitHub-OIDC exchange in CI) and falling back to org
+// OAuth client creds (TS_ORG_OAUTH_CLIENT_ID/SECRET, from code/.env for local runs).
+func newTailnetClient(t *testing.T) *tailnet.Client {
+	t.Helper()
+	loadEnv()
+	if tok := os.Getenv("TS_API_ACCESS_TOKEN"); tok != "" {
+		return tailnet.NewFromAccessToken(tok)
+	}
+	orgID, orgSec := getOrgCreds()
+	if orgID == "" || orgSec == "" {
+		t.Skip("no TS_API_ACCESS_TOKEN or TS_ORG_OAUTH_CLIENT_ID/SECRET — skipping e2e")
+	}
+	return tailnet.New(orgID, orgSec)
+}
+
 // forceCleanEG removes any stale EgressGroup of this name — clearing its finalizer so a
 // previous run's now-deleted tailnet can't wedge it — and waits for its gateway pods to
 // disappear, so the test reads a genuinely fresh gateway.
