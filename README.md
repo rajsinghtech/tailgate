@@ -147,8 +147,11 @@ spec:
   routes:                    # tailnet CIDRs to steer onto members (CGNAT + ULA are always steered)
     - 10.0.0.0/8             # non-empty routes ⇒ subnet reach — there is no separate "mode" field
   acceptRoutes: true         # gateway accepts subnet-router + app-connector routes (default true)
-  exitNode:                  # optional — route members' default route through this tailnet node
-    nodeID: exit-fra1.your-org.ts.net
+  exitNode:                  # optional — route members' default route through a tailnet exit node
+    nodeID: exit-fra1.your-org.ts.net   # pin one node, OR auto-select instead:
+    # auto: true              # let the operator pick any eligible exit node (advertises 0.0.0.0/0)
+    # tag: tag:exit-prod      # narrow auto-selection to a tag
+    # region: fra             # narrow auto-selection to nodes tagged tag:exit-fra
     allowLANAccess: true
   dns:                       # optional — give members native tailnet DNS (see below)
     enabled: true
@@ -220,6 +223,12 @@ You write intent; there is no `mode` field — behaviour follows what you set:
 `spec.exitNode` puts the full-tunnel default route in a dedicated policy table (never the pod's
 `main` table), and the agent keeps the cluster pod/service CIDRs on the primary CNI so kube-DNS and
 the API server stay reachable. The gateway *uses* an exit node; it never advertises itself as one.
+
+Instead of a hand-typed `nodeID`, set `exitNode.auto: true` (optionally narrowed by `tag` or
+`region`) and the operator resolves a concrete eligible exit node from the tailnet — one advertising
+`0.0.0.0/0`, preferring an online node — and pins it. The chosen node is echoed in
+`status.resolvedExitNode`, and the operator re-resolves on a periodic requeue so a node going
+offline fails over to another candidate without an edit.
 
 ## Native tailnet DNS
 

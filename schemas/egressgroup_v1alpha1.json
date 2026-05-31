@@ -53,14 +53,23 @@
               "description": "AllowLANAccess keeps direct LAN/cluster reachability while the exit node carries\nthe default route.",
               "type": "boolean"
             },
+            "auto": {
+              "description": "Auto lets the operator pick any eligible exit node (one advertising 0.0.0.0/0 + ::/0),\nnarrowed by Tag/Region if set, resolving to a concrete node and re-resolving on failover.",
+              "type": "boolean"
+            },
             "nodeID": {
-              "description": "NodeID is the exit node's MagicDNS name, StableID, or tailnet IP.",
+              "description": "NodeID pins a specific exit node (its MagicDNS name, StableID, or tailnet IP).",
+              "type": "string"
+            },
+            "region": {
+              "description": "Region restricts auto-selection to exit nodes tagged tag:exit-<region> (a location\nconvention, since the device API carries no location field), e.g. region \"de\".",
+              "type": "string"
+            },
+            "tag": {
+              "description": "Tag restricts auto-selection to exit nodes carrying this tailnet tag (e.g. tag:exit-eu).",
               "type": "string"
             }
           },
-          "required": [
-            "nodeID"
-          ],
           "type": "object",
           "additionalProperties": false
         },
@@ -266,6 +275,10 @@
         "matchedPods": {
           "format": "int32",
           "type": "integer"
+        },
+        "resolvedExitNode": {
+          "description": "ResolvedExitNode is the concrete exit node the gateway was pinned to \u2014 an echo of a\nstatic NodeID, or the node the operator auto-selected.",
+          "type": "string"
         }
       },
       "type": "object",

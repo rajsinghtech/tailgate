@@ -11,10 +11,24 @@ type EgressSelector struct {
 }
 
 // ExitNodeRef selects a tailnet exit node to route all member egress through. The
-// gateway is a client that USES an exit node; it never offers itself as one.
+// gateway is a client that USES an exit node; it never offers itself as one. Pin one with
+// NodeID, or let the operator pick with Auto (optionally narrowed by Tag/Region) and
+// re-resolve on failover.
 type ExitNodeRef struct {
-	// NodeID is the exit node's MagicDNS name, StableID, or tailnet IP.
-	NodeID string `json:"nodeID"`
+	// NodeID pins a specific exit node (its MagicDNS name, StableID, or tailnet IP).
+	// +optional
+	NodeID string `json:"nodeID,omitempty"`
+	// Auto lets the operator pick any eligible exit node (one advertising 0.0.0.0/0 + ::/0),
+	// narrowed by Tag/Region if set, resolving to a concrete node and re-resolving on failover.
+	// +optional
+	Auto bool `json:"auto,omitempty"`
+	// Tag restricts auto-selection to exit nodes carrying this tailnet tag (e.g. tag:exit-eu).
+	// +optional
+	Tag string `json:"tag,omitempty"`
+	// Region restricts auto-selection to exit nodes tagged tag:exit-<region> (a location
+	// convention, since the device API carries no location field), e.g. region "de".
+	// +optional
+	Region string `json:"region,omitempty"`
 	// AllowLANAccess keeps direct LAN/cluster reachability while the exit node carries
 	// the default route.
 	// +optional
@@ -118,6 +132,10 @@ type EgressGroupStatus struct {
 	// tailnet resolution.
 	// +optional
 	DNSInjected int32 `json:"dnsInjected,omitempty"`
+	// ResolvedExitNode is the concrete exit node the gateway was pinned to — an echo of a
+	// static NodeID, or the node the operator auto-selected.
+	// +optional
+	ResolvedExitNode string `json:"resolvedExitNode,omitempty"`
 }
 
 // +kubebuilder:object:root=true

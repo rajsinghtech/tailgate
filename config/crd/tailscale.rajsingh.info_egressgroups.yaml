@@ -95,12 +95,24 @@ spec:
                       AllowLANAccess keeps direct LAN/cluster reachability while the exit node carries
                       the default route.
                     type: boolean
+                  auto:
+                    description: |-
+                      Auto lets the operator pick any eligible exit node (one advertising 0.0.0.0/0 + ::/0),
+                      narrowed by Tag/Region if set, resolving to a concrete node and re-resolving on failover.
+                    type: boolean
                   nodeID:
-                    description: NodeID is the exit node's MagicDNS name, StableID,
-                      or tailnet IP.
+                    description: NodeID pins a specific exit node (its MagicDNS name,
+                      StableID, or tailnet IP).
                     type: string
-                required:
-                - nodeID
+                  region:
+                    description: |-
+                      Region restricts auto-selection to exit nodes tagged tag:exit-<region> (a location
+                      convention, since the device API carries no location field), e.g. region "de".
+                    type: string
+                  tag:
+                    description: Tag restricts auto-selection to exit nodes carrying
+                      this tailnet tag (e.g. tag:exit-eu).
+                    type: string
                 type: object
               mirrorRoutes:
                 description: |-
@@ -307,6 +319,11 @@ spec:
               matchedPods:
                 format: int32
                 type: integer
+              resolvedExitNode:
+                description: |-
+                  ResolvedExitNode is the concrete exit node the gateway was pinned to — an echo of a
+                  static NodeID, or the node the operator auto-selected.
+                type: string
             type: object
         type: object
     served: true
