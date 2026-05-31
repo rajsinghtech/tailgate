@@ -1,6 +1,7 @@
 # tailgate-gateway — per-group DaemonSet (privileged). Our entrypoint runs on top
-# of the tailscale base image, which supplies tailscaled (kernel TUN), iptables,
-# ip6tables, and busybox (mknod/sysctl/ip).
+# of the tailscale base image, which supplies tailscaled (kernel TUN) and busybox
+# (mknod). The datapath is programmed natively via nftables/netlink (no iptables/ip
+# shell-outs); the nft CLI is added for debuggability and the e2e ruleset assertion.
 #
 # BUILDPLATFORM compiles natively then cross-targets, which is faster than QEMU.
 FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.26 AS builder
@@ -26,5 +27,6 @@ RUN GOWORK=off CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go bui
 
 # Final stage carries tailscaled + the networking userland the gateway needs.
 FROM tailscale/tailscale:v1.98.4
+RUN apk add --no-cache nftables
 COPY --from=builder /workspace/tailgate-gateway /usr/local/bin/tailgate-gateway
 ENTRYPOINT ["/usr/local/bin/tailgate-gateway"]

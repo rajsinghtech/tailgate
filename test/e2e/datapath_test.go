@@ -139,6 +139,12 @@ func TestEgressDatapath(t *testing.T) {
 	}
 	t.Log("PASS: member reached the CGNAT v4 peer through the gateway")
 
+	// Prove the datapath was programmed via NATIVE nftables (not legacy iptables). On stock
+	// kind the legacy modules are present, so a regression to iptables would still pass the
+	// curl above — this assertion is what catches it (and mirrors the nf_tables-only Talos
+	// reality where legacy silently no-ops).
+	verifyGatewayNetfilter(t, ctx, cfg, cs, "e2e")
+
 	// 5b. family-independence: this kind cluster is v4-only, yet the member must reach
 	// the peer's IPv6 ULA through the SAME gateway (the veth link is dual-stack). Proves
 	// a v4-only cluster carries v6 / 4via6 tailnet traffic.
@@ -300,6 +306,28 @@ func execPod(ctx context.Context, cfg *rest.Config, cs *kubernetes.Clientset, po
 	var out, errb bytes.Buffer
 	err = ex.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &out, Stderr: &errb})
 	return out.String(), errb.String(), err
+}
+
+// verifyGatewayNetfilter execs `nft list table inet tailgate` in a gateway pod and asserts
+// the mark + masquerade rules are present — proving the gateway used native nftables.
+func verifyGatewayNetfilter(t *testing.T, ctx context.Context, cfg *rest.Config, cs *kubernetes.Clientset, group string) {
+	t.Helper()
+	pods, err := cs.CoreV1().Pods(tgNS).List(ctx, metav1.ListOptions{LabelSelector: "tailgate.dev/group=" + group})
+	must(t, err, "list gateway pods")
+	if len(pods.Items) == 0 {
+		t.Fatalf("no gateway pod for group %q", group)
+	}
+	gw := pods.Items[0].Name
+	out, errOut, err := execIn(ctx, cfg, cs, tgNS, gw, "gateway", []string{"nft", "list", "table", "inet", "tailgate"})
+	if err != nil {
+		t.Fatalf("nft list table inet tailgate in %s failed: %v (stderr: %s) — datapath not in nftables", gw, err, errOut)
+	}
+	for _, want := range []string{`iifname "tgbr0"`, `oifname "tailscale0"`, "masquerade", "7717"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("gateway nft table missing %q; ruleset:\n%s", want, out)
+		}
+	}
+	t.Logf("PASS: gateway %s programmed the native nft datapath (table inet tailgate)", gw)
 }
 
 func cleanupObj(t *testing.T, kc ctrlclient.Client, obj ctrlclient.Object) {

@@ -36,3 +36,13 @@ jobs:
 
       - name: Run tests
         run: go test ./...
+
+      # The internal/netfilter tests program real nftables rules in a fresh network
+      # namespace, so they need root (CAP_NET_ADMIN). This is the CI gate that exercises
+      # the native nft datapath on the runner's nf_tables kernel — the path the gateway
+      # uses on Talos+Cilium where legacy iptables is unavailable.
+      - name: Run datapath tests (root — needs netns + nftables)
+        run: |
+          sudo env "PATH=$PATH" "GOWORK=off" \
+            "GOMODCACHE=$(go env GOMODCACHE)" "GOCACHE=$(go env GOCACHE)" \
+            go test ./internal/netfilter/... -v

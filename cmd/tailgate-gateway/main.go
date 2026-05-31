@@ -1,3 +1,5 @@
+//go:build linux
+
 // tailgate-gateway is the per-group gateway entrypoint. It runs tailscaled in
 // kernel-TUN mode inside the gateway pod's netns, driven entirely by a declarative
 // config file (tailscaled --config) that the operator renders from the EgressGroup
@@ -6,7 +8,9 @@
 // the spec (exit node, accept-routes, DNS), the ConfigMap updates and we call
 // LocalAPI ReloadConfig — tailscaled re-applies prefs with NO restart, so the node
 // identity and tunnels stay up. The agent stitches member veths into this netns.
-// `tailgate-gateway ready` is the readiness probe.
+// The datapath (nftables NAT/mark + policy routing) is programmed natively via
+// internal/netfilter — no iptables/ip shell-outs — so it works on nf_tables-only hosts
+// (Talos+Cilium). `tailgate-gateway ready` is the readiness probe.
 package main
 
 import (
@@ -18,12 +22,17 @@ import (
 	"time"
 
 	"tailscale.com/client/local"
+
+	"github.com/rajsinghtech/tailgate/internal/netfilter"
 )
 
 const (
 	sock       = "/var/run/tailscale/tailscaled.sock"
 	configPath = "/etc/tailgate/tailscaled.json"
 	gwBridge   = "tgbr0" // the agent enslaves member veths here (must match internal/agent)
+
+	fwMark  uint32 = 0x7717 // member traffic mark (must match the policy-routing rule)
+	fwTable int    = 7717   // policy routing table the mark steers into
 )
 
 func main() {
@@ -61,19 +70,9 @@ func liveMain() int {
 
 func run() {
 	must("ensure tun", ensureTun())
-	sh("sysctl", "-w", "net.ipv4.ip_forward=1")
-	sh("sysctl", "-w", "net.ipv6.conf.all.forwarding=1")
-	// Disable reverse-path filtering: member egress is policy-routed into the TUN via the
-	// fwmark table, so replies (esp. exit-node internet egress) arrive on tailscale0 while the
-	// main-table route to that source is via eth0 — strict rp_filter would drop them as
-	// martians. Effective rp_filter = max(all, per-iface), so zero `all` + `default` (template
-	// for tailscale0, created later by tailscaled) + eth0. NetfilterMode=off means tailscaled
-	// doesn't install its own connmark/rp_filter-compat rules, so we own this.
-	sh("sysctl", "-w", "net.ipv4.conf.all.rp_filter=0")
-	sh("sysctl", "-w", "net.ipv4.conf.default.rp_filter=0")
-	sh("sysctl", "-w", "net.ipv4.conf.eth0.rp_filter=0")
-	// Permissive FORWARD so pod<->tailscale0 forwarding works regardless of veth name.
-	sh("iptables", "-P", "FORWARD", "ACCEPT")
+	// Enable forwarding + relax rp_filter (member egress is policy-routed asymmetrically).
+	// NetfilterMode=off in the config keeps tailscaled out of netfilter so we own the datapath.
+	must("forwarding/rp_filter", netfilter.EnableForwardingAndRelaxRPFilter())
 
 	// tailscaled in the background, driven by the declarative --config file. Enabled=true
 	// in the config brings the node up; the authkey (file:) carries the tags. Persistent
@@ -108,28 +107,16 @@ func run() {
 		time.Sleep(time.Second)
 	}
 
-	// The gateway's OWN traffic uses the MAIN table: eth0 for cluster/control + DERP, and
-	// these routes to reach tailnet peers directly (incl. the exit-node peer's CGNAT IP and
-	// 100.100.100.100 MagicDNS): v4 CGNAT + v6 ULA (peers + 4via6).
-	sh("ip", "route", "replace", "100.64.0.0/10", "dev", "tailscale0")
-	sh("ip", "-6", "route", "replace", "fd7a:115c:a1e0::/48", "dev", "tailscale0")
-
-	// FORWARDED member traffic (ingress via the agent's bridge) is marked and policy-routed
-	// into the TUN, so tailscaled routes EACH destination per its netmap: CGNAT peers,
-	// accepted subnet-router / app-connector CIDRs, and the exit node for 0.0.0.0/0. This is
-	// required because tailscaled installs accepted/exit routes in its policy table 52, which
-	// forwarded+MASQUERADEd traffic never hits — the main table alone would leak member
-	// traffic out eth0. Marking by ingress bridge keeps the gateway's own egress on main.
-	const fwMark, fwTable = "0x7717", "7717"
-	sh("iptables", "-t", "mangle", "-A", "PREROUTING", "-i", gwBridge, "-j", "MARK", "--set-mark", fwMark)
-	sh("ip", "rule", "add", "fwmark", fwMark, "lookup", fwTable, "priority", "1000")
-	sh("ip", "route", "replace", "default", "dev", "tailscale0", "table", fwTable)
-	sh("ip", "-6", "rule", "add", "fwmark", fwMark, "lookup", fwTable, "priority", "1000")
-	sh("ip", "-6", "route", "replace", "default", "dev", "tailscale0", "table", fwTable)
-
-	// SNAT forwarded traffic onto the tailnet (source = this gateway's tailnet IP).
-	sh("iptables", "-t", "nat", "-A", "POSTROUTING", "-o", "tailscale0", "-j", "MASQUERADE")
-	sh("ip6tables", "-t", "nat", "-A", "POSTROUTING", "-o", "tailscale0", "-j", "MASQUERADE")
+	// Program the forward datapath natively (after the TUN exists). nftables: mark member
+	// ingress on tgbr0 + MASQUERADE egress on tailscale0. netlink: fwmark -> table 7717
+	// (default via the TUN, so tailscaled routes each destination per its netmap — CGNAT
+	// peers, accepted subnet/app-connector CIDRs, exit node for 0.0.0.0/0), plus the
+	// gateway's own CGNAT/ULA routes. Marking by ingress bridge keeps the gateway's own
+	// egress on the main table. Fails LOUD (must) rather than the old silent iptables no-op.
+	dp, err := netfilter.New()
+	must("netfilter", err)
+	must("masquerade + mark", dp.SetupMASQUERADE(gwBridge, fwMark, "tailscale0"))
+	must("policy routing", netfilter.SetupPolicyRouting(fwMark, fwTable, "tailscale0"))
 
 	fmt.Println("tailgate-gateway up:", getenv("TS_GROUP", "?"))
 
@@ -182,12 +169,6 @@ func ensureTun() error {
 	}
 	_ = os.MkdirAll("/dev/net", 0o755)
 	return exec.Command("mknod", "/dev/net/tun", "c", "10", "200").Run()
-}
-
-func sh(name string, args ...string) error {
-	c := exec.Command(name, args...)
-	c.Stdout, c.Stderr = os.Stdout, os.Stderr
-	return c.Run()
 }
 
 func must(what string, err error) {
