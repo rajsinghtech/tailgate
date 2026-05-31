@@ -23,8 +23,8 @@ The tailnet sees `O(groups)` devices, not `O(pods)`.
 - **Reach everything the tailnet exposes** — CGNAT peers (`100.64.0.0/10` + the IPv6 ULA), advertised subnet-router CIDRs, app-connector ranges, and full-tunnel through a chosen exit node.
 - **IPv6 / dual-stack** — the pod↔gateway veth is dual-stack, enabling members to reach peers over both their CGNAT v4 and ULA v6 regardless of the cluster's own IP family.
 - **Live reconcile, no pod flap** — change `acceptRoutes`, swap the `exitNode`, or adjust DNS on a running group and the gateway hot-reloads its config in place, keeping member tunnels up through the reconcile.
-- **MagicDNS** — members point at `100.100.100.100` and resolve peers' `*.ts.net` names through the shared gateway's resolver.
-- **No Multus, no Spiderpool, no second NIC** — the default `routed` attach is a single chained route-only CNI plugin that injects tailnet routes onto each member pod's existing `eth0`.
+- **Native tailnet DNS** — set `dns.enabled` and members resolve like native Tailscale clients (MagicDNS `*.ts.net`, the tailnet's split-DNS domains, app-connector names, global forwarding) via the gateway's `100.100.100.100`, with `cluster.local` kept on CoreDNS. A mutating webhook injects the resolver — no per-pod config.
+- **No Multus, no Spiderpool, no second NIC** — a single chained route-only CNI plugin injects tailnet routes onto each member pod's existing `eth0`.
 
 ## Custom Resources
 
@@ -144,29 +144,29 @@ spec:
     podSelector:
       matchLabels:
         tailgate.dev/egress: "true"
-  mode: subnet               # cgnat (default) | subnet
   routes:                    # tailnet CIDRs to steer onto members (CGNAT + ULA are always steered)
-    - 10.0.0.0/8
+    - 10.0.0.0/8             # non-empty routes ⇒ subnet reach — there is no separate "mode" field
   acceptRoutes: true         # gateway accepts subnet-router + app-connector routes (default true)
   exitNode:                  # optional — route members' default route through this tailnet node
     nodeID: exit-fra1.your-org.ts.net
     allowLANAccess: true
-  replicas: 1                # gateway HA; pod churn never touches this
+  dns:                       # optional — give members native tailnet DNS (see below)
+    enabled: true
 ```
 
 ```bash
 kubectl apply -f payments-egress.yaml
 kubectl get eg
-# NAME       MODE     ATTACH   PODS   AGE
-# payments   subnet   routed   4      30s
+# NAME       PODS   DNS    AGE
+# payments   4      true   30s
 ```
 
 Any pod matching the selector now reaches `100.64.0.0/10`, the IPv6 ULA, and `10.0.0.0/8`
 **natively** through the shared gateway — no sidecar, no per-pod annotation, no app changes. A pod
 that doesn't match is untouched.
 
-The minimal group is just a selector (everything else defaults — `mode: cgnat`, `attach: routed`,
-`datapath: kernel`, `replicas: 1`):
+The minimal group is just a selector — members reach CGNAT peers + the ULA, with the gateway placed
+node-local automatically:
 
 ```yaml
 apiVersion: tailscale.rajsingh.info/v1alpha1
@@ -206,23 +206,43 @@ so traffic in flight survives the reconcile. When the config reloads successfull
 group's reachability avoids a pod restart. (Because tags ride on the authkey rather than the config,
 they're deliberately *not* a hot-reload field.)
 
-## Egress modes
+## What members reach
 
-| `spec.mode` | Members reach |
-|-------------|---------------|
-| `cgnat` (default) | Tailnet peers by CGNAT IP (`100.64.0.0/10`) + the IPv6 ULA. |
-| `subnet` | Everything in `cgnat`, plus the advertised subnet-router / app-connector CIDRs listed in `spec.routes`. |
+You write intent; there is no `mode` field — behaviour follows what you set:
 
-`spec.exitNode` is orthogonal to `mode`: set it (in any mode) to push `0.0.0.0/0` + `::/0` onto
-members through the chosen exit node. The full-tunnel default route lives in a dedicated policy table
-(never the pod's `main` table), and the agent keeps `TAILGATE_CLUSTER_CIDRS` on the primary CNI so
-kube-DNS and the API server stay reachable. The gateway *uses* an exit node; it does not advertise
-itself as one.
+| You set | Members reach |
+|---------|---------------|
+| *(just a selector)* | Tailnet peers by CGNAT IP (`100.64.0.0/10`) + the IPv6 ULA. |
+| `routes: [...]` | The above, plus the advertised subnet-router / app-connector CIDRs you list. |
+| `exitNode: {...}` | Full-tunnel — `0.0.0.0/0` + `::/0` through the chosen exit node (composes with the above). |
+| `dns: {enabled: true}` | Native tailnet DNS (see below). |
 
-`spec.datapath` defaults to `kernel` (the full-fat client: userspace WireGuard + a kernel TUN device,
-needing a privileged/`NET_ADMIN` gateway pod) — the only path that delivers native whole-CIDR,
-all-protocol egress. `spec.attach` is `routed` (the chained route-only CNI, the no-dependency
-default).
+`spec.exitNode` puts the full-tunnel default route in a dedicated policy table (never the pod's
+`main` table), and the agent keeps the cluster pod/service CIDRs on the primary CNI so kube-DNS and
+the API server stay reachable. The gateway *uses* an exit node; it never advertises itself as one.
+
+## Native tailnet DNS
+
+By default a member keeps cluster DNS. Set `dns.enabled` and the operator's mutating webhook gives
+matched members native tailnet resolution — no per-pod config:
+
+```yaml
+spec:
+  selector:
+    podSelector: {matchLabels: {tailgate.dev/egress: "true"}}
+  dns:
+    enabled: true
+```
+
+Their resolver becomes the gateway's MagicDNS at `100.100.100.100` — which already serves the whole
+tailnet namespace (MagicDNS `*.ts.net`, the tailnet's split-DNS domains, app-connector names, and
+global forwarding) — with the auto-detected cluster resolver kept as a secondary for `cluster.local`.
+No new routes are needed: `100.100.100.100` is inside the CGNAT range already steered onto members.
+
+The webhook self-signs its serving certificate (no cert-manager dependency) and runs
+`failurePolicy: Ignore`, so a webhook outage degrades to cluster DNS rather than blocking pod
+creation. Override the secondary resolver / search list with `dns.clusterDNS` / `dns.searchDomains` /
+`dns.ndots`; opt an individual pod out with the label `tailgate.dev/no-dns-inject`.
 
 ## Development
 
@@ -247,18 +267,20 @@ hack/e2e.sh v4 --keep   # leave the cluster up afterwards
 The same datapath test runs for every family — it curls the peer over **both** v4 and v6 through the
 always-dual-stack veth, proving family-independence regardless of the cluster's own primary family.
 
-The e2e suite (`test/e2e/*.go`, build tag `e2e`) needs an OAuth client with org-tailnet
-create/delete scope, supplied via `TS_ORG_OAUTH_CLIENT_ID` / `TS_ORG_OAUTH_CLIENT_SECRET` (CI uses
-GitHub OIDC token-exchange so there's no long-lived secret). It covers the full stack against a real
-tailnet:
+The e2e suite (`test/e2e/*.go`, build tag `e2e`) authenticates to the org-tailnet create/delete API
+via GitHub OIDC **Workload Identity Federation** in CI (no long-lived secret); locally it falls back
+to `TS_ORG_OAUTH_CLIENT_ID` / `TS_ORG_OAUTH_CLIENT_SECRET`. Each test creates, runs in, and deletes
+its own ephemeral tailnet. It covers the full stack against a real tailnet:
 
 | Test | Proves |
 |------|--------|
-| `TestEgressDatapath` | member → node-local gateway (veth + MASQUERADE) → CGNAT peer, over both v4 and v6 |
-| `TestSubnetRouterReachability` | `mode: subnet` member reaches a backend IP inside an advertised CIDR; non-member denied |
+| `TestEgressDatapath` | member → node-local gateway (veth + nftables MASQUERADE) → CGNAT peer, over both v4 and v6; the gateway programs a native `inet tailgate` nft table |
+| `TestSubnetRouterReachability` | a member with `routes` set reaches a backend IP inside an advertised CIDR; non-member denied |
 | `TestAppConnectorReachability` | member's traffic to a real app-connector preset's published CIDRs is intercepted through the gateway |
 | `TestExitNodeFullTunnel` | exit-node selection + member full-tunnel routing (table 7717 + cluster carve-outs); kube-DNS still resolves |
 | `TestMagicDNSThroughGateway` | a member pointed only at `100.100.100.100` resolves a peer's `*.ts.net` name through the gateway |
+| `TestNativeDNSWebhook` | `dns.enabled` makes the webhook inject native DNS into a plain member pod, which then resolves + reaches a peer by name; non-member untouched |
+| `TestAgentRestartNoReWire` | an agent rolling update adopts existing wirings (ts0 ifindex unchanged) — no egress blip |
 | `TestConfigReconcileNoRestart` | flipping `acceptRoutes` + selecting an `exitNode` on a running group reloads prefs with the gateway pod unchanged (same UID, `restartCount=0`) |
 | `TestRenderGatewayConfigRoundTrips` | the rendered `tailscaled.json` round-trips through the real `conffile.Load` |
 
