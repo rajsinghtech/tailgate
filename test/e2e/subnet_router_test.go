@@ -66,7 +66,6 @@ func TestSubnetRouterReachability(t *testing.T) {
 	must(t, kc.Create(ctx, &egressv1.EgressGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: egressv1.EgressGroupSpec{
-			Mode:     egressv1.ModeSubnet,
 			Routes:   []string{subnetCIDR},
 			Selector: egressv1.EgressSelector{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"egress": name}}},
 		},

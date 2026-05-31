@@ -18,8 +18,11 @@ rules:
     resources: ["egressgroups", "egressgroups/status", "egressgroups/finalizers"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
-    resources: ["pods", "namespaces"]
+    resources: ["pods", "namespaces", "services"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["mutatingwebhookconfigurations"]
+    verbs: ["get", "list", "watch", "update", "patch"]
   - apiGroups: [""]
     resources: ["secrets", "configmaps"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
@@ -71,6 +74,59 @@ spec:
               valueFrom: { secretKeyRef: { name: tailgate-tailnet-creds, key: TS_OAUTH_CLIENT_ID } }
             - name: TS_OAUTH_CLIENT_SECRET
               valueFrom: { secretKeyRef: { name: tailgate-tailnet-creds, key: TS_OAUTH_CLIENT_SECRET } }
+            - name: WEBHOOK_SERVICE
+              value: tailgate-operator-webhook
+            - name: WEBHOOK_CONFIG
+              value: tailgate-webhook
+          ports:
+            - name: webhook
+              containerPort: 9443
+          volumeMounts:
+            - name: webhook-certs
+              mountPath: /tmp/k8s-webhook-server/serving-certs
+      volumes:
+        - name: webhook-certs
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tailgate-operator-webhook
+  namespace: tailgate-system
+spec:
+  selector: { app: tailgate-operator }
+  ports:
+    - name: webhook
+      port: 443
+      targetPort: webhook
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: tailgate-webhook
+webhooks:
+  - name: dns.tailscale.rajsingh.info
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Ignore
+    timeoutSeconds: 5
+    clientConfig:
+      service:
+        name: tailgate-operator-webhook
+        namespace: tailgate-system
+        path: /mutate-v1-pod
+        port: 443
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+        scope: Namespaced
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: ["kube-system", "tailgate-system"]
 ---
 apiVersion: apps/v1
 kind: DaemonSet

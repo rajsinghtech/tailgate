@@ -1,0 +1,60 @@
+{{- if .Values.webhook.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tailgate-operator.fullname" . }}-webhook
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "tailgate-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+spec:
+  selector:
+    {{- include "tailgate-operator.operator.selectorLabels" . | nindent 4 }}
+  ports:
+  - name: webhook
+    port: 443
+    targetPort: webhook
+    protocol: TCP
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  # Name must match WEBHOOK_CONFIG on the operator (it patches the caBundle at startup).
+  name: {{ include "tailgate-operator.fullname" . }}
+  labels:
+    {{- include "tailgate-operator.labels" . | nindent 4 }}
+webhooks:
+- name: dns.tailscale.rajsingh.info
+  admissionReviewVersions: ["v1"]
+  sideEffects: None
+  # A missed injection degrades to cluster DNS — never block pod creation on the webhook.
+  failurePolicy: Ignore
+  reinvocationPolicy: IfNeeded
+  timeoutSeconds: 5
+  clientConfig:
+    service:
+      name: {{ include "tailgate-operator.fullname" . }}-webhook
+      namespace: {{ .Release.Namespace }}
+      path: /mutate-v1-pod
+      port: 443
+    # caBundle is injected by the operator at startup (self-signed serving cert).
+  rules:
+  - apiGroups: [""]
+    apiVersions: ["v1"]
+    operations: ["CREATE"]
+    resources: ["pods"]
+    scope: Namespaced
+  # Never touch system namespaces or tailgate's own (gateway/agent live here).
+  namespaceSelector:
+    matchExpressions:
+    - key: kubernetes.io/metadata.name
+      operator: NotIn
+      values:
+      - kube-system
+      - {{ .Release.Namespace | quote }}
+  # Opt-out hatch for individual pods.
+  objectSelector:
+    matchExpressions:
+    - key: tailgate.dev/no-dns-inject
+      operator: DoesNotExist
+{{- end }}

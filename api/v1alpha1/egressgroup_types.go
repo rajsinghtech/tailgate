@@ -2,16 +2,6 @@ package v1alpha1
 
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-// EgressMode selects what the per-group gateway makes reachable.
-type EgressMode string
-
-const (
-	// ModeCGNAT: reach tailnet peers (100.64.0.0/10 + ULA).
-	ModeCGNAT EgressMode = "cgnat"
-	// ModeSubnet: reach advertised subnet-router CIDRs (plus CGNAT).
-	ModeSubnet EgressMode = "subnet"
-)
-
 // EgressSelector picks the pods whose egress is steered through the group gateway.
 type EgressSelector struct {
 	// +optional
@@ -31,31 +21,41 @@ type ExitNodeRef struct {
 	AllowLANAccess bool `json:"allowLANAccess,omitempty"`
 }
 
+// MemberDNS makes matched member pods native tailnet DNS clients. When Enabled, the
+// operator's mutating webhook injects dnsPolicy=None + a dnsConfig that points primarily at
+// the gateway's MagicDNS (100.100.100.100) — which already serves the whole tailnet
+// namespace (MagicDNS *.ts.net, split-DNS domains, app-connector names, global forwarding) —
+// and keeps the in-cluster resolver as a secondary for cluster.local. Off unless Enabled.
+type MemberDNS struct {
+	// Enabled turns on resolv.conf injection for matched members.
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
+
+	// ClusterDNS is the in-cluster resolver ClusterIP used as the secondary nameserver for
+	// cluster.local. Auto-detected from the kube-dns/CoreDNS Service when empty.
+	// +optional
+	ClusterDNS string `json:"clusterDNS,omitempty"`
+
+	// SearchDomains overrides the injected search list. Defaults to
+	// [<ns>.svc.cluster.local, svc.cluster.local, cluster.local].
+	// +optional
+	SearchDomains []string `json:"searchDomains,omitempty"`
+
+	// Ndots for the injected resolv.conf options. Defaults to 5 (standard Kubernetes).
+	// +optional
+	Ndots *int32 `json:"ndots,omitempty"`
+}
+
 // EgressGroupSpec is the desired state of an EgressGroup.
 type EgressGroupSpec struct {
 	// Selector picks member pods (gateway-side selection; no Multus needed).
 	Selector EgressSelector `json:"selector"`
 
-	// Mode selects what the gateway makes reachable.
-	// +kubebuilder:validation:Enum=cgnat;subnet
-	// +kubebuilder:default=cgnat
-	Mode EgressMode `json:"mode,omitempty"`
-
-	// Datapath: kernel (full-fat TUN, default) or userspace (netstack).
-	// +kubebuilder:validation:Enum=kernel;userspace
-	// +kubebuilder:default=kernel
-	Datapath string `json:"datapath,omitempty"`
-
-	// Attach: how member pods reach the gateway. MVP supports "routed".
-	// +kubebuilder:validation:Enum=routed
-	// +kubebuilder:default=routed
-	Attach string `json:"attach,omitempty"`
-
 	// Routes are the tailnet-reachable CIDRs to steer through the gateway onto member
-	// pods — private subnet-router ranges and/or public app-connector ranges. This
-	// drives member-side route programming only; the gateway accepts routes via
-	// AcceptRoutes. CGNAT (100.64.0.0/10) and the IPv6 ULA are always steered and need
-	// not be listed. We dial, not serve: the gateway never ADVERTISES routes.
+	// pods — private subnet-router ranges and/or public app-connector ranges. CGNAT
+	// (100.64.0.0/10) and the IPv6 ULA are always steered and need not be listed. A
+	// non-empty Routes is the implicit "subnet" signal. We dial, not serve: the gateway
+	// never ADVERTISES routes.
 	// +optional
 	Routes []string `json:"routes,omitempty"`
 
@@ -71,15 +71,9 @@ type EgressGroupSpec struct {
 	// +optional
 	ExitNode *ExitNodeRef `json:"exitNode,omitempty"`
 
-	// Tailnet is informational for the MVP (the gateway joins whatever tailnet the
-	// operator's OAuth credentials belong to).
+	// DNS makes matched member pods native tailnet DNS clients (see MemberDNS).
 	// +optional
-	Tailnet string `json:"tailnet,omitempty"`
-
-	// Replicas of the gateway Deployment. Pod churn never touches these.
-	// +kubebuilder:default=1
-	// +kubebuilder:validation:Minimum=1
-	Replicas int32 `json:"replicas,omitempty"`
+	DNS *MemberDNS `json:"dns,omitempty"`
 
 	// Tags for the gateway tailnet node. Defaults to ["tag:egress-<name>"].
 	// +optional
@@ -98,14 +92,17 @@ type EgressGroupStatus struct {
 	AdvertisedRoutes string `json:"advertisedRoutes,omitempty"`
 	// +optional
 	MatchedPods int32 `json:"matchedPods,omitempty"`
+	// DNSInjected is the number of member pods whose DNS the webhook mutated for native
+	// tailnet resolution.
+	// +optional
+	DNSInjected int32 `json:"dnsInjected,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,shortName=eg
-// +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=`.spec.mode`
-// +kubebuilder:printcolumn:name="Attach",type=string,JSONPath=`.spec.attach`
 // +kubebuilder:printcolumn:name="Pods",type=integer,JSONPath=`.status.matchedPods`
+// +kubebuilder:printcolumn:name="DNS",type=boolean,JSONPath=`.spec.dns.enabled`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // EgressGroup is a set of pods that egress onto the tailnet through one shared gateway.

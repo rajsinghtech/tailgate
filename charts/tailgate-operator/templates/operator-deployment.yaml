@@ -63,6 +63,17 @@ spec:
             secretKeyRef:
               name: {{ .Values.tailnet.secretName }}
               key: TS_OAUTH_CLIENT_SECRET
+        - name: WEBHOOK_SERVICE
+          value: {{ include "tailgate-operator.fullname" . }}-webhook
+        - name: WEBHOOK_CONFIG
+          value: {{ include "tailgate-operator.fullname" . }}
+        ports:
+        - name: webhook
+          containerPort: 9443
+          protocol: TCP
+        volumeMounts:
+        - name: webhook-certs
+          mountPath: /tmp/k8s-webhook-server/serving-certs
         {{- with .Values.securityContext }}
         securityContext:
           {{- toYaml . | nindent 10 }}
@@ -71,6 +82,11 @@ spec:
         resources:
           {{- toYaml . | nindent 10 }}
         {{- end }}
+      volumes:
+      # readOnlyRootFilesystem is on, so the self-signed webhook serving cert (written at
+      # startup) needs a writable mount.
+      - name: webhook-certs
+        emptyDir: {}
       {{- with .Values.operator.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

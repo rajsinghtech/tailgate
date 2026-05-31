@@ -40,7 +40,7 @@ func TestReconcileCreatesGatewaySecretService(t *testing.T) {
 	s := newScheme(t)
 	eg := &egressv1.EgressGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: "payments"},
-		Spec:       egressv1.EgressGroupSpec{Mode: egressv1.ModeSubnet, Routes: []string{"10.50.0.0/16"}, Replicas: 2},
+		Spec:       egressv1.EgressGroupSpec{Routes: []string{"10.50.0.0/16"}},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(eg).
 		WithStatusSubresource(&egressv1.EgressGroup{}).Build()

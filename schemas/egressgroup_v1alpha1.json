@@ -19,22 +19,32 @@
           "description": "AcceptRoutes makes the gateway accept subnet-router and app-connector routes\nadvertised on the tailnet (--accept-routes). Defaults to true \u2014 a client egress\ngateway normally wants whatever the tailnet makes reachable. Hot-reloadable.",
           "type": "boolean"
         },
-        "attach": {
-          "default": "routed",
-          "description": "Attach: how member pods reach the gateway. MVP supports \"routed\".",
-          "enum": [
-            "routed"
-          ],
-          "type": "string"
-        },
-        "datapath": {
-          "default": "kernel",
-          "description": "Datapath: kernel (full-fat TUN, default) or userspace (netstack).",
-          "enum": [
-            "kernel",
-            "userspace"
-          ],
-          "type": "string"
+        "dns": {
+          "description": "DNS makes matched member pods native tailnet DNS clients (see MemberDNS).",
+          "properties": {
+            "clusterDNS": {
+              "description": "ClusterDNS is the in-cluster resolver ClusterIP used as the secondary nameserver for\ncluster.local. Auto-detected from the kube-dns/CoreDNS Service when empty.",
+              "type": "string"
+            },
+            "enabled": {
+              "description": "Enabled turns on resolv.conf injection for matched members.",
+              "type": "boolean"
+            },
+            "ndots": {
+              "description": "Ndots for the injected resolv.conf options. Defaults to 5 (standard Kubernetes).",
+              "format": "int32",
+              "type": "integer"
+            },
+            "searchDomains": {
+              "description": "SearchDomains overrides the injected search list. Defaults to\n[<ns>.svc.cluster.local, svc.cluster.local, cluster.local].",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "type": "object",
+          "additionalProperties": false
         },
         "exitNode": {
           "description": "ExitNode routes all member egress (default route) through a chosen tailnet exit\nnode. Optional; hot-reloadable. Selecting one puts 0.0.0.0/0 + ::/0 on member\npods (in a dedicated policy table, never the pod main table).",
@@ -54,24 +64,8 @@
           "type": "object",
           "additionalProperties": false
         },
-        "mode": {
-          "default": "cgnat",
-          "description": "Mode selects what the gateway makes reachable.",
-          "enum": [
-            "cgnat",
-            "subnet"
-          ],
-          "type": "string"
-        },
-        "replicas": {
-          "default": 1,
-          "description": "Replicas of the gateway Deployment. Pod churn never touches these.",
-          "format": "int32",
-          "minimum": 1,
-          "type": "integer"
-        },
         "routes": {
-          "description": "Routes are the tailnet-reachable CIDRs to steer through the gateway onto member\npods \u2014 private subnet-router ranges and/or public app-connector ranges. This\ndrives member-side route programming only; the gateway accepts routes via\nAcceptRoutes. CGNAT (100.64.0.0/10) and the IPv6 ULA are always steered and need\nnot be listed. We dial, not serve: the gateway never ADVERTISES routes.",
+          "description": "Routes are the tailnet-reachable CIDRs to steer through the gateway onto member\npods \u2014 private subnet-router ranges and/or public app-connector ranges. CGNAT\n(100.64.0.0/10) and the IPv6 ULA are always steered and need not be listed. A\nnon-empty Routes is the implicit \"subnet\" signal. We dial, not serve: the gateway\nnever ADVERTISES routes.",
           "items": {
             "type": "string"
           },
@@ -184,10 +178,6 @@
             "type": "string"
           },
           "type": "array"
-        },
-        "tailnet": {
-          "description": "Tailnet is informational for the MVP (the gateway joins whatever tailnet the\noperator's OAuth credentials belong to).",
-          "type": "string"
         }
       },
       "required": [
@@ -260,6 +250,11 @@
             "type"
           ],
           "x-kubernetes-list-type": "map"
+        },
+        "dnsInjected": {
+          "description": "DNSInjected is the number of member pods whose DNS the webhook mutated for native\ntailnet resolution.",
+          "format": "int32",
+          "type": "integer"
         },
         "gatewayHostname": {
           "type": "string"

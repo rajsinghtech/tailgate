@@ -115,10 +115,7 @@ kind: EgressGroup
 metadata:
   name: my-egress
 spec:
-  # cgnat exposes the tailnet's 100.64.0.0/10 range; subnet steers spec.routes.
-  mode: cgnat
-  attach: routed
-  replicas: 1
+  # the minimal group: reach tailnet peers (CGNAT 100.64.0.0/10 + the IPv6 ULA).
   selector:
     podSelector:
       matchLabels:
@@ -133,12 +130,13 @@ kind: EgressGroup
 metadata:
   name: prod-egress
 spec:
-  mode: subnet
-  routes:
+  routes:                  # non-empty routes ⇒ subnet reach (there is no "mode" field)
     - 10.20.0.0/16
   exitNode:
     nodeID: us-exit-1
     allowLANAccess: true
+  dns:
+    enabled: true          # give members native tailnet DNS
   selector:
     namespaceSelector:
       matchLabels:

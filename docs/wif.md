@@ -1,26 +1,29 @@
 # workload identity federation for the tailscale api
 
-tailgate talks to the tailscale api in two places, and today both want a long-lived
-oauth client secret:
+tailgate talks to the tailscale api in two places:
 
-- **e2e** (`test/e2e/*.go`, build tag `e2e`) uses an **org-level** oauth client
-  (`TS_ORG_OAUTH_CLIENT_ID` / `TS_ORG_OAUTH_CLIENT_SECRET`) to create and tear down a
-  throwaway ephemeral tailnet per run — `internal/tailnet` POSTs to
-  `/api/v2/organizations/-/tailnets` with an org access token, then uses the per-tailnet
-  child oauth client the response hands back for acl/keys/delete.
-- **the operator** (`cmd/tailgate-operator`) uses a **tailnet-scoped** oauth client
+- **e2e** (`test/e2e/*.go`, build tag `e2e`) creates and tears down a throwaway ephemeral
+  tailnet per run via an **org-level** token — `internal/tailnet` POSTs to
+  `/api/v2/organizations/-/tailnets`, then uses the per-tailnet child oauth client the
+  response hands back for acl/keys/delete. **In CI this org token comes from workload
+  identity federation — no long-lived secret** (locally it falls back to
+  `TS_ORG_OAUTH_CLIENT_ID` / `TS_ORG_OAUTH_CLIENT_SECRET`).
+- **the operator** (`cmd/tailgate-operator`) still uses a **tailnet-scoped** oauth client
   (`TS_OAUTH_CLIENT_ID` / `TS_OAUTH_CLIENT_SECRET`, from the `tailgate-tailnet-creds`
   secret) to mint gateway authkeys and delete gateway devices on teardown
-  (`internal/tsclient`).
+  (`internal/tsclient`). Moving this to wif is future work.
 
-workload identity federation (wif) lets us drop the static secret in ci entirely. the
-github actions job proves who it is with a github-signed oidc token, exchanges it at
-tailscale for a short-lived api access token, and uses that token wherever we'd have used
-the oauth client. nothing long-lived is stored in github secrets.
+workload identity federation (wif): the github actions job proves who it is with a
+github-signed oidc token, exchanges it at tailscale for a short-lived api access token, and
+uses that token instead of an oauth client secret. nothing long-lived is stored in github
+secrets.
 
-this is the same flow tailvoy uses for its integration tests
-(`integration_test/scripts/exchange-oidc-token.sh` + `.github/workflows/integration-test.yml`).
-tailgate's portable adaptation is `hack/wif-exchange.sh`.
+**implemented for the e2e** (`.github/workflows/test-e2e.yml`): the job declares
+`id-token: write`, fetches a github oidc jwt for the audience `api.tailscale.com/<client-id>`,
+exchanges it at `/api/v2/oauth/token-exchange` for an org access token, and passes it to the
+harness as `TS_API_ACCESS_TOKEN` (`internal/tailnet.NewFromAccessToken`). this is the same
+flow tailvoy uses (`integration_test/scripts/exchange-oidc-token.sh` +
+`.github/workflows/integration-test.yml`).
 
 ## the token-exchange flow
 
@@ -112,6 +115,11 @@ the one long-lived secret the repo actually stores.
 
 ## how the e2e ci uses it
 
+> **live**: this is implemented in `.github/workflows/test-e2e.yml`. The shipped job does the
+> exchange **inline** (no helper script) and passes the token to the harness as
+> `TS_API_ACCESS_TOKEN`, which `internal/tailnet.NewFromAccessToken` consumes. The
+> helper-script variant below is an equivalent reference.
+
 the job needs `id-token: write` so github will mint oidc tokens for it. the exchange step
 runs `hack/wif-exchange.sh`, masks the result, and passes it to the tailnet-setup steps
 in place of an org oauth secret.
@@ -150,7 +158,7 @@ jobs:
       # the e2e harness reads the org access token directly (no client secret).
       - name: run e2e
         env:
-          TS_ORG_ACCESS_TOKEN: ${{ steps.ts.outputs.access_token }}
+          TS_API_ACCESS_TOKEN: ${{ steps.ts.outputs.access_token }}
         run: make e2e
 ```
 
@@ -178,19 +186,17 @@ what tailvoy does:
           echo "access_token=$ACCESS_TOKEN" >> "$GITHUB_OUTPUT"
 ```
 
-### code change required in the e2e harness
+### code change in the e2e harness (implemented)
 
-today `internal/tailnet.New(orgID, orgSecret)` takes a client id + secret and internally
-calls `/api/v2/oauth/token` to mint an org access token. with wif the job already holds an
-org access token, so the harness should accept a **pre-minted token** instead of minting
-one:
+`internal/tailnet.New(orgID, orgSecret)` mints an org access token via
+`/api/v2/oauth/token`. With wif the job already holds an org access token, so the harness
+accepts a **pre-minted token** instead:
 
-- add a `tailnet.NewWithToken(accessToken string)` (or accept `TS_ORG_ACCESS_TOKEN` in the
-  test setup) that skips the `oauthToken()` client-credentials step and uses the bearer
-  token directly for the org create/list calls.
-- keep the existing `New(id, secret)` path for local runs from `code/.env`, where a human
-  still uses a plain oauth client. the test setup picks whichever env is present:
-  `TS_ORG_ACCESS_TOKEN` (ci/wif) over `TS_ORG_OAUTH_CLIENT_ID/SECRET` (local).
+- `tailnet.NewFromAccessToken(token)` skips the `oauthToken()` client-credentials step and
+  uses the bearer token directly for the org create/list calls (`orgToken()` returns it).
+- the existing `New(id, secret)` path stays for local runs from `code/.env`. The shared
+  `newTailnetClient(t)` helper picks whichever env is present: `TS_API_ACCESS_TOKEN`
+  (ci/wif) over `TS_ORG_OAUTH_CLIENT_ID/SECRET` (local).
 
 the per-tailnet child oauth client that `Create` returns is unchanged — it's minted inside
 the ephemeral tailnet and used for acl/keys/delete and as the operator-under-test's creds,
