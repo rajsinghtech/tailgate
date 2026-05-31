@@ -72,11 +72,6 @@ func (in *EgressGroupList) DeepCopyObject() runtime.Object {
 func (in *EgressGroupSpec) DeepCopyInto(out *EgressGroupSpec) {
 	*out = *in
 	in.Selector.DeepCopyInto(&out.Selector)
-	if in.Routes != nil {
-		in, out := &in.Routes, &out.Routes
-		*out = make([]string, len(*in))
-		copy(*out, *in)
-	}
 	if in.AcceptRoutes != nil {
 		in, out := &in.AcceptRoutes, &out.AcceptRoutes
 		*out = new(bool)
@@ -91,11 +86,6 @@ func (in *EgressGroupSpec) DeepCopyInto(out *EgressGroupSpec) {
 		in, out := &in.DNS, &out.DNS
 		*out = new(MemberDNS)
 		(*in).DeepCopyInto(*out)
-	}
-	if in.MirrorRoutes != nil {
-		in, out := &in.MirrorRoutes, &out.MirrorRoutes
-		*out = new(bool)
-		**out = **in
 	}
 	if in.Tags != nil {
 		in, out := &in.Tags, &out.Tags

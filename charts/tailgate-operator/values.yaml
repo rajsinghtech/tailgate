@@ -44,9 +44,12 @@ agent:
     pullPolicy: IfNotPresent
     # -- Overrides the image tag (default is the chart appVersion)
     tag: ""
-  # -- In-cluster CIDRs kept on the primary CNI for exit-node members so kube-dns /
-  # the API server never blackhole through the full tunnel. Production should carve
-  # BOTH the pod and service CIDRs (e.g. "10.244.0.0/16,10.96.0.0/12"). Comma-separated.
+  # -- In-cluster pod + service CIDRs to keep on the primary CNI — never steered onto the
+  # tailnet. Guards cluster networking two ways: a member on an exit node (full tunnel) keeps
+  # reaching kube-dns / the API server instead of blackholing through the tunnel, and any
+  # accepted/mirrored tailnet route that overlaps a cluster range is dropped before it would
+  # capture pod/service traffic. Carve BOTH the pod and service CIDRs (e.g.
+  # "10.244.0.0/16,10.96.0.0/12"). Comma-separated.
   clusterCIDRs: "10.96.0.0/12"
   # Resource requests and limits for the agent
   resources:

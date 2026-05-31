@@ -20,9 +20,9 @@ import (
 
 const mirrorDir = "/run/tailgate" // hostPath the gateway publishes <group>.routes into
 
-// mirroredRoutes reads the gateway's published reachable routes for a MirrorRoutes-enabled
-// group (subnet-router + app-connector CIDRs), dropping any that overlap cluster ranges so
-// cluster traffic is never steered into the gateway. Returns nil (no mirroring) otherwise.
+// mirroredRoutes reads the gateway's published reachable routes for a route-mirroring group
+// (subnet-router + app-connector CIDRs), dropping any that overlap cluster ranges so cluster
+// traffic is never steered into the gateway. Returns nil (no mirroring) otherwise.
 func (a *Agent) mirroredRoutes(group string, g *egressv1.EgressGroup) []string {
 	if g == nil || !g.Spec.MirrorRoutesEnabled() {
 		return nil
@@ -154,7 +154,7 @@ func (a *Agent) sync(ctx context.Context, done map[string]wired) error {
 			continue
 		}
 		g := findGroup(groups.Items, grp)
-		mir := a.mirroredRoutes(grp, g) // nil unless MirrorRoutes is enabled
+		mir := a.mirroredRoutes(grp, g) // nil unless route-mirroring is enabled
 		// Already wired to the CURRENT gateway with the SAME mirrored routes? nothing to do.
 		// (A gateway restart changes the netns; a netmap change changes mir -> re-wire.)
 		if w, ok := done[ip]; ok && w.gwNs == gwNs && equalStrings(w.mirrored, mir) {
@@ -174,7 +174,7 @@ func (a *Agent) sync(ctx context.Context, done map[string]wired) error {
 		if w, ok := done[ip]; ok {
 			stale = subtractStrings(w.mirrored, mir) // mirrored routes withdrawn since last wire
 		}
-		if err := Wire(info, gwNs, append(routeSet(g), mir...), stale, exit); err != nil {
+		if err := Wire(info, gwNs, append(routeSet(), mir...), stale, exit); err != nil {
 			a.Log.Error("wire", "pod", p.Name, "err", err)
 			continue
 		}

@@ -60,13 +60,13 @@ func TestSubnetRouterReachability(t *testing.T) {
 	must(t, err, "mint router authkey")
 	startSubnetRouter(t, ctx, rkey, "tailgate-subnet-router", subnetCIDR, "router-ok")
 
-	// 3. mode=subnet EgressGroup steering subnetCIDR onto members.
+	// 3. EgressGroup with no routes — the gateway accepts the advertised subnetCIDR
+	// (autoApprover) and route-mirroring steers it onto members by default.
 	name := "subnet"
 	forceCleanEG(t, ctx, cs, kc, name)
 	must(t, kc.Create(ctx, &egressv1.EgressGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: egressv1.EgressGroupSpec{
-			Routes:   []string{subnetCIDR},
 			Selector: egressv1.EgressSelector{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"egress": name}}},
 		},
 	}), "create egressgroup")

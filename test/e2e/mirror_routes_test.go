@@ -1,7 +1,7 @@
 //go:build e2e
 
-// Route-mirroring e2e: with MirrorRoutes enabled and NO spec.routes, a member still reaches an
-// app-connector CIDR — because the gateway accepts the connector's advertised route, publishes
+// Route-mirroring e2e: with route-mirroring on by default (acceptRoutes) and NO spec.routes, a
+// member still reaches an app-connector CIDR — because the gateway accepts the connector's route, publishes
 // it to /run/tailgate/<group>.routes, and the agent steers it onto the member's ts0. This is
 // the "egress follows resolution" half: whatever the gateway can reach, members can reach,
 // without anyone listing CIDRs in spec.routes.
@@ -15,7 +15,6 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/utils/ptr"
 
 	egressv1 "github.com/rajsinghtech/tailgate/api/v1alpha1"
 )
@@ -58,14 +57,14 @@ func TestMirrorRoutes(t *testing.T) {
 	must(t, err, "mint connector authkey")
 	startAppConnector(t, ctx, ckey, "tailgate-mirror-connector", githubCIDR, "mirror-ok")
 
-	// EgressGroup with NO routes — MirrorRoutes steers whatever the gateway accepts.
+	// EgressGroup with NO routes — the gateway's accepted routes are steered onto members by
+	// default (acceptRoutes defaults true), so the member reaches the app-connector CIDR.
 	name := "mirror"
 	forceCleanEG(t, ctx, cs, kc, name)
 	must(t, kc.Create(ctx, &egressv1.EgressGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: egressv1.EgressGroupSpec{
-			MirrorRoutes: ptr.To(true),
-			Selector:     egressv1.EgressSelector{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"egress": name}}},
+			Selector: egressv1.EgressSelector{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"egress": name}}},
 		},
 	}), "create egressgroup")
 	t.Cleanup(func() { deleteEGWait(kc, name) })

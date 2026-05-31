@@ -3,15 +3,13 @@ package agent
 import (
 	"net/netip"
 	"testing"
-
-	egressv1 "github.com/rajsinghtech/tailgate/api/v1alpha1"
 )
 
 // routeSet must always carry both the v4 CGNAT range and the v6 ULA so a member reaches
-// the tailnet on either family regardless of the cluster's primary IP family.
+// the tailnet on either family regardless of the cluster's primary IP family. (Accepted
+// subnet/app-connector routes are added on top by route-mirroring, not by routeSet.)
 func TestRouteSetFamilies(t *testing.T) {
-	g := &egressv1.EgressGroup{Spec: egressv1.EgressGroupSpec{Routes: []string{"10.0.0.0/8", "2001:db8::/32"}}}
-	got := routeSet(g)
+	got := routeSet()
 
 	var have4CGNAT, haveULA bool
 	for _, c := range got {
@@ -32,8 +30,7 @@ func TestRouteSetFamilies(t *testing.T) {
 	if !haveULA {
 		t.Error("routeSet missing v6 ULA fd7a:115c:a1e0::/48")
 	}
-	// advertised subnet routes (both families) must be carried through
-	if len(got) != 4 {
-		t.Errorf("expected CGNAT + ULA + 2 advertised routes, got %v", got)
+	if len(got) != 2 {
+		t.Errorf("expected exactly CGNAT + ULA, got %v", got)
 	}
 }
