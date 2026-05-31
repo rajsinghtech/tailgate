@@ -4,6 +4,7 @@ go 1.26.3
 
 require (
 	github.com/containernetworking/cni v1.3.0
+	github.com/google/nftables v0.2.1-0.20240414091927-5e242ec57806
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vishvananda/netns v0.0.5
 	k8s.io/api v0.34.0
