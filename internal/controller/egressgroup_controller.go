@@ -76,7 +76,6 @@ func (r *EgressGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	eg.Status.GatewayHostname = gatewayName(eg.Name)
-	eg.Status.AdvertisedRoutes = strings.Join(eg.Spec.Routes, ",")
 	eg.Status.ResolvedExitNode = exitNodeID
 	if err := r.Status().Update(ctx, &eg); err != nil {
 		return ctrl.Result{}, err

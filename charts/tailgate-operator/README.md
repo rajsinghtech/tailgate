@@ -77,7 +77,7 @@ See [values.yaml](values.yaml) for the full list of configurable parameters.
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `agent.enabled` | Deploy the per-node agent DaemonSet | `true` |
-| `agent.clusterCIDRs` | In-cluster CIDRs kept on the primary CNI for exit-node members (comma-separated) | `10.96.0.0/12` |
+| `agent.clusterCIDRs` | In-cluster pod + service CIDRs kept on the primary CNI, never steered onto the tailnet — protects kube-dns / API server under an exit node and drops accepted/mirrored routes that overlap cluster ranges. Carve both pod and service CIDRs. Comma-separated. | `10.96.0.0/12` |
 | `agent.tolerations` | Agent pod tolerations | `[{operator: Exists}]` |
 
 ### Tailnet credentials

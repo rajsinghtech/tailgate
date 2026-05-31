@@ -60,18 +60,12 @@ type EgressGroupSpec struct {
 	// Selector picks member pods (gateway-side selection; no Multus needed).
 	Selector EgressSelector `json:"selector"`
 
-	// Routes explicitly steers these tailnet-reachable CIDRs through the gateway onto member
-	// pods — private subnet-router ranges and/or public app-connector ranges. CGNAT
-	// (100.64.0.0/10) and the IPv6 ULA are always steered and need not be listed. Usually
-	// unnecessary: while the gateway accepts routes, MirrorRoutes steers everything it can
-	// reach onto members automatically; Routes is the explicit pin for a fixed set, or for
-	// when MirrorRoutes is off. We dial, not serve: the gateway never ADVERTISES routes.
-	// +optional
-	Routes []string `json:"routes,omitempty"`
-
-	// AcceptRoutes makes the gateway accept subnet-router and app-connector routes
-	// advertised on the tailnet (--accept-routes). Defaults to true — a client egress
-	// gateway normally wants whatever the tailnet makes reachable. Hot-reloadable.
+	// AcceptRoutes makes the gateway accept the subnet-router and app-connector routes
+	// advertised on the tailnet (--accept-routes), and the agent steers those onto member
+	// pods — so members reach everything the gateway's tag is granted to reach. Defaults to
+	// true; set false to restrict members to CGNAT peers only. To reach a specific subset,
+	// scope the gateway's tag with grants (the tailnet policy layer), not a per-CIDR list.
+	// Hot-reloadable. We dial, not serve: the gateway never ADVERTISES routes.
 	// +optional
 	AcceptRoutes *bool `json:"acceptRoutes,omitempty"`
 
@@ -84,15 +78,6 @@ type EgressGroupSpec struct {
 	// DNS makes matched member pods native tailnet DNS clients (see MemberDNS).
 	// +optional
 	DNS *MemberDNS `json:"dns,omitempty"`
-
-	// MirrorRoutes steers every route the gateway can reach (the accepted subnet-router /
-	// app-connector CIDRs, minus cluster ranges) onto member pods, so a member reaches
-	// everything the gateway does without listing it in Routes — the native-client behaviour.
-	// Defaults to on whenever the gateway accepts routes (AcceptRoutes, default true); set
-	// false to opt out and steer only Routes. Ignored when ExitNode is set (the full-tunnel
-	// default route already covers everything).
-	// +optional
-	MirrorRoutes *bool `json:"mirrorRoutes,omitempty"`
 
 	// Tags for the gateway tailnet node. The OAuth client must own these. Defaults to
 	// ["tag:k8s"] (the Tailscale operator's convention) when unset.
@@ -109,18 +94,12 @@ func (s *EgressGroupSpec) AcceptRoutesEnabled() bool {
 	return true
 }
 
-// MirrorRoutesEnabled reports whether the agent steers the gateway's reachable routes onto
-// members: never under ExitNode (the full tunnel covers it), else the explicit value, else
-// defaulting to on whenever the gateway accepts routes — so a member reaches everything the
-// gateway can (the native-client behaviour) without listing Routes.
+// MirrorRoutesEnabled reports whether the agent steers the gateway's accepted routes onto
+// members — on whenever the gateway accepts routes, so a member reaches everything the gateway
+// can (the native-client behaviour); off under ExitNode (the full tunnel already covers it).
+// This is internal plumbing for the gateway/member netns split, not a user-facing knob.
 func (s *EgressGroupSpec) MirrorRoutesEnabled() bool {
-	if s.ExitNode != nil {
-		return false
-	}
-	if s.MirrorRoutes != nil {
-		return *s.MirrorRoutes
-	}
-	return s.AcceptRoutesEnabled()
+	return s.ExitNode == nil && s.AcceptRoutesEnabled()
 }
 
 // EgressGroupStatus is the observed state of an EgressGroup.
@@ -131,8 +110,6 @@ type EgressGroupStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// +optional
 	GatewayHostname string `json:"gatewayHostname,omitempty"`
-	// +optional
-	AdvertisedRoutes string `json:"advertisedRoutes,omitempty"`
 	// +optional
 	MatchedPods int32 `json:"matchedPods,omitempty"`
 	// DNSInjected is the number of member pods whose DNS the webhook mutated for native

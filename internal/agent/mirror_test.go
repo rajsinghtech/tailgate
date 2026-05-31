@@ -46,10 +46,8 @@ func TestMirrorRoutesEnabled(t *testing.T) {
 	}{
 		{"default on (accepts routes by default)", egressv1.EgressGroupSpec{}, true},
 		{"acceptRoutes off disables", egressv1.EgressGroupSpec{AcceptRoutes: ptr.To(false)}, false},
-		{"explicit true", egressv1.EgressGroupSpec{MirrorRoutes: ptr.To(true)}, true},
-		{"explicit true beats acceptRoutes off", egressv1.EgressGroupSpec{AcceptRoutes: ptr.To(false), MirrorRoutes: ptr.To(true)}, true},
-		{"explicit false opts out", egressv1.EgressGroupSpec{MirrorRoutes: ptr.To(false)}, false},
 		{"exit node disables", egressv1.EgressGroupSpec{ExitNode: &egressv1.ExitNodeRef{Name: "x"}}, false},
+		{"exit node disables even with accept routes", egressv1.EgressGroupSpec{AcceptRoutes: ptr.To(true), ExitNode: &egressv1.ExitNodeRef{Name: "x"}}, false},
 	}
 	for _, c := range cases {
 		if got := c.spec.MirrorRoutesEnabled(); got != c.want {

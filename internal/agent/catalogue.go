@@ -39,13 +39,11 @@ func matchGroup(pod *corev1.Pod, nsLabels map[string]string, groups []egressv1.E
 	return ""
 }
 
-// routeSet is the tailnet CIDRs a member of g must route at its gateway. The CGNAT v4
-// range and the Tailscale IPv6 ULA (covers MagicDNS, peer ULAs and 4via6 mappings under
-// fd7a:115c:a1e0::/48) are always included; advertised subnet CIDRs are added for
-// mode=subnet. v6 CIDRs are routed even on a v4-only cluster — the veth link is dual-stack.
-func routeSet(g *egressv1.EgressGroup) []string {
-	out := make([]string, 0, 2+len(g.Spec.Routes))
-	out = append(out, "100.64.0.0/10", "fd7a:115c:a1e0::/48")
-	out = append(out, g.Spec.Routes...)
-	return out
+// routeSet is the base tailnet CIDRs every member routes at its gateway: the CGNAT v4 range
+// and the Tailscale IPv6 ULA (covers MagicDNS, peer ULAs and 4via6 mappings under
+// fd7a:115c:a1e0::/48). The gateway's accepted subnet-router / app-connector routes are added
+// on top by route-mirroring. Both families are routed even on a single-family cluster — the
+// veth link is dual-stack.
+func routeSet() []string {
+	return []string{"100.64.0.0/10", "fd7a:115c:a1e0::/48"}
 }

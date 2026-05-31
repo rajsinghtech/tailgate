@@ -16,7 +16,7 @@
       "description": "EgressGroupSpec is the desired state of an EgressGroup.",
       "properties": {
         "acceptRoutes": {
-          "description": "AcceptRoutes makes the gateway accept subnet-router and app-connector routes\nadvertised on the tailnet (--accept-routes). Defaults to true \u2014 a client egress\ngateway normally wants whatever the tailnet makes reachable. Hot-reloadable.",
+          "description": "AcceptRoutes makes the gateway accept the subnet-router and app-connector routes\nadvertised on the tailnet (--accept-routes), and the agent steers those onto member\npods \u2014 so members reach everything the gateway's tag is granted to reach. Defaults to\ntrue; set false to restrict members to CGNAT peers only. To reach a specific subset,\nscope the gateway's tag with grants (the tailnet policy layer), not a per-CIDR list.\nHot-reloadable. We dial, not serve: the gateway never ADVERTISES routes.",
           "type": "boolean"
         },
         "dns": {
@@ -60,17 +60,6 @@
           },
           "type": "object",
           "additionalProperties": false
-        },
-        "mirrorRoutes": {
-          "description": "MirrorRoutes steers every route the gateway can reach (the accepted subnet-router /\napp-connector CIDRs, minus cluster ranges) onto member pods, so a member reaches\neverything the gateway does without listing it in Routes \u2014 the native-client behaviour.\nDefaults to on whenever the gateway accepts routes (AcceptRoutes, default true); set\nfalse to opt out and steer only Routes. Ignored when ExitNode is set (the full-tunnel\ndefault route already covers everything).",
-          "type": "boolean"
-        },
-        "routes": {
-          "description": "Routes explicitly steers these tailnet-reachable CIDRs through the gateway onto member\npods \u2014 private subnet-router ranges and/or public app-connector ranges. CGNAT\n(100.64.0.0/10) and the IPv6 ULA are always steered and need not be listed. Usually\nunnecessary: while the gateway accepts routes, MirrorRoutes steers everything it can\nreach onto members automatically; Routes is the explicit pin for a fixed set, or for\nwhen MirrorRoutes is off. We dial, not serve: the gateway never ADVERTISES routes.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
         },
         "selector": {
           "description": "Selector picks member pods (gateway-side selection; no Multus needed).",
@@ -190,9 +179,6 @@
     "status": {
       "description": "EgressGroupStatus is the observed state of an EgressGroup.",
       "properties": {
-        "advertisedRoutes": {
-          "type": "string"
-        },
         "conditions": {
           "items": {
             "description": "Condition contains details for one aspect of the current state of this API Resource.",
