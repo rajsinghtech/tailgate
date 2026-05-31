@@ -3,16 +3,21 @@
 package main
 
 import (
+	"context"
 	"os"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	ctrlwebhook "sigs.k8s.io/controller-runtime/pkg/webhook"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	egressv1 "github.com/rajsinghtech/tailgate/api/v1alpha1"
 	"github.com/rajsinghtech/tailgate/internal/controller"
 	"github.com/rajsinghtech/tailgate/internal/tsclient"
+	tgwebhook "github.com/rajsinghtech/tailgate/internal/webhook"
 )
 
 func getenv(k, def string) string {
@@ -36,7 +41,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{Scheme: scheme})
+	cfg := ctrl.GetConfigOrDie()
+	certDir := getenv("WEBHOOK_CERT_DIR", "/tmp/k8s-webhook-server/serving-certs")
+	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
+		Scheme:        scheme,
+		WebhookServer: ctrlwebhook.NewServer(ctrlwebhook.Options{CertDir: certDir, Port: 9443}),
+	})
 	if err != nil {
 		log.Error(err, "manager")
 		os.Exit(1)
@@ -60,6 +70,25 @@ func main() {
 		log.Error(err, "setup reconciler")
 		os.Exit(1)
 	}
+
+	// DNS mutating webhook: self-bootstrap a serving cert (no cert-manager) and register the
+	// pod mutator that gives dns-enabled members native tailnet DNS.
+	ns := getenv("POD_NAMESPACE", "tailgate-system")
+	direct, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		log.Error(err, "direct client")
+		os.Exit(1)
+	}
+	if err := tgwebhook.EnsureCerts(context.Background(), direct, certDir,
+		getenv("WEBHOOK_SERVICE", "tailgate-operator-webhook"), ns,
+		getenv("WEBHOOK_CONFIG", "tailgate-operator")); err != nil {
+		log.Error(err, "webhook certs")
+		os.Exit(1)
+	}
+	mgr.GetWebhookServer().Register("/mutate-v1-pod", &admission.Webhook{
+		Handler: &tgwebhook.DNSMutator{Client: mgr.GetClient(), Decoder: admission.NewDecoder(scheme)},
+	})
+
 	log.Info("starting tailgate-operator")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		log.Error(err, "manager exited")

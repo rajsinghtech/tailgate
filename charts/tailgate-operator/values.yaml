@@ -75,6 +75,13 @@ gateway:
     # -- Overrides the gateway image tag (default is the chart appVersion)
     tag: ""
 
+# DNS mutating webhook. When an EgressGroup sets dns.enabled, member pods it selects get
+# native tailnet DNS (resolver = the gateway's 100.100.100.100, cluster.local kept on
+# CoreDNS). The operator self-signs the serving cert (no cert-manager dependency).
+webhook:
+  # -- Deploy the DNS mutating webhook (Service + MutatingWebhookConfiguration).
+  enabled: true
+
 # Tailnet credentials. The operator mints ephemeral authkeys via the Tailscale
 # OAuth API for the gateways it provisions.
 tailnet:

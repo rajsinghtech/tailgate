@@ -107,7 +107,7 @@ func TestEgressDatapath(t *testing.T) {
 	cleanupObj(t, kc, &egressv1.EgressGroup{ObjectMeta: metav1.ObjectMeta{Name: "e2e"}})
 	must(t, kc.Create(ctx, &egressv1.EgressGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: "e2e"},
-		Spec: egressv1.EgressGroupSpec{Mode: egressv1.ModeCGNAT,
+		Spec: egressv1.EgressGroupSpec{
 			Selector: egressv1.EgressSelector{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"egress": "e2e"}}}},
 	}), "create egressgroup")
 	t.Cleanup(func() { deleteEGWait(kc, "e2e") }) // finalizer device-delete runs before tailnet Close

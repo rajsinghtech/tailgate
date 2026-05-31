@@ -17,15 +17,12 @@ spec:
   scope: Cluster
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.mode
-      name: Mode
-      type: string
-    - jsonPath: .spec.attach
-      name: Attach
-      type: string
     - jsonPath: .status.matchedPods
       name: Pods
       type: integer
+    - jsonPath: .spec.dns.enabled
+      name: DNS
+      type: boolean
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -61,21 +58,32 @@ spec:
                   advertised on the tailnet (--accept-routes). Defaults to true — a client egress
                   gateway normally wants whatever the tailnet makes reachable. Hot-reloadable.
                 type: boolean
-              attach:
-                default: routed
-                description: 'Attach: how member pods reach the gateway. MVP supports
-                  "routed".'
-                enum:
-                - routed
-                type: string
-              datapath:
-                default: kernel
-                description: 'Datapath: kernel (full-fat TUN, default) or userspace
-                  (netstack).'
-                enum:
-                - kernel
-                - userspace
-                type: string
+              dns:
+                description: DNS makes matched member pods native tailnet DNS clients
+                  (see MemberDNS).
+                properties:
+                  clusterDNS:
+                    description: |-
+                      ClusterDNS is the in-cluster resolver ClusterIP used as the secondary nameserver for
+                      cluster.local. Auto-detected from the kube-dns/CoreDNS Service when empty.
+                    type: string
+                  enabled:
+                    description: Enabled turns on resolv.conf injection for matched
+                      members.
+                    type: boolean
+                  ndots:
+                    description: Ndots for the injected resolv.conf options. Defaults
+                      to 5 (standard Kubernetes).
+                    format: int32
+                    type: integer
+                  searchDomains:
+                    description: |-
+                      SearchDomains overrides the injected search list. Defaults to
+                      [<ns>.svc.cluster.local, svc.cluster.local, cluster.local].
+                    items:
+                      type: string
+                    type: array
+                type: object
               exitNode:
                 description: |-
                   ExitNode routes all member egress (default route) through a chosen tailnet exit
@@ -94,27 +102,13 @@ spec:
                 required:
                 - nodeID
                 type: object
-              mode:
-                default: cgnat
-                description: Mode selects what the gateway makes reachable.
-                enum:
-                - cgnat
-                - subnet
-                type: string
-              replicas:
-                default: 1
-                description: Replicas of the gateway Deployment. Pod churn never touches
-                  these.
-                format: int32
-                minimum: 1
-                type: integer
               routes:
                 description: |-
                   Routes are the tailnet-reachable CIDRs to steer through the gateway onto member
-                  pods — private subnet-router ranges and/or public app-connector ranges. This
-                  drives member-side route programming only; the gateway accepts routes via
-                  AcceptRoutes. CGNAT (100.64.0.0/10) and the IPv6 ULA are always steered and need
-                  not be listed. We dial, not serve: the gateway never ADVERTISES routes.
+                  pods — private subnet-router ranges and/or public app-connector ranges. CGNAT
+                  (100.64.0.0/10) and the IPv6 ULA are always steered and need not be listed. A
+                  non-empty Routes is the implicit "subnet" signal. We dial, not serve: the gateway
+                  never ADVERTISES routes.
                 items:
                   type: string
                 type: array
@@ -226,11 +220,6 @@ spec:
                 items:
                   type: string
                 type: array
-              tailnet:
-                description: |-
-                  Tailnet is informational for the MVP (the gateway joins whatever tailnet the
-                  operator's OAuth credentials belong to).
-                type: string
             required:
             - selector
             type: object
@@ -298,6 +287,12 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              dnsInjected:
+                description: |-
+                  DNSInjected is the number of member pods whose DNS the webhook mutated for native
+                  tailnet resolution.
+                format: int32
+                type: integer
               gatewayHostname:
                 type: string
               matchedPods:
