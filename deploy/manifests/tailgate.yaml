@@ -163,3 +163,12 @@ spec:
             # node, giving an observable source-IP traversal proof.
             - name: TAILGATE_CLUSTER_CIDRS
               value: "10.96.0.0/12"
+          volumeMounts:
+            - name: run
+              mountPath: /run/tailgate
+              readOnly: true
+      volumes:
+        - name: run
+          hostPath:
+            path: /run/tailgate
+            type: DirectoryOrCreate

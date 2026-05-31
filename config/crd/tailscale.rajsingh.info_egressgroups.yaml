@@ -102,6 +102,15 @@ spec:
                 required:
                 - nodeID
                 type: object
+              mirrorRoutes:
+                description: |-
+                  MirrorRoutes steers every route the gateway can reach (peer AllowedIPs + accepted
+                  subnet-router / app-connector CIDRs, minus cluster ranges) onto member pods, so egress
+                  follows DNS resolution — e.g. an app-connector domain resolved via the gateway is then
+                  reachable by the IP it resolved to, with no static spec.routes. Defaults to true when
+                  DNS.Enabled (native-client mode wants resolution and egress to agree). Ignored when
+                  ExitNode is set (the full-tunnel default route already covers everything).
+                type: boolean
               routes:
                 description: |-
                   Routes are the tailnet-reachable CIDRs to steer through the gateway onto member
