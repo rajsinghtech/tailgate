@@ -60,11 +60,12 @@ type EgressGroupSpec struct {
 	// Selector picks member pods (gateway-side selection; no Multus needed).
 	Selector EgressSelector `json:"selector"`
 
-	// Routes are the tailnet-reachable CIDRs to steer through the gateway onto member
+	// Routes explicitly steers these tailnet-reachable CIDRs through the gateway onto member
 	// pods — private subnet-router ranges and/or public app-connector ranges. CGNAT
-	// (100.64.0.0/10) and the IPv6 ULA are always steered and need not be listed. A
-	// non-empty Routes is the implicit "subnet" signal. We dial, not serve: the gateway
-	// never ADVERTISES routes.
+	// (100.64.0.0/10) and the IPv6 ULA are always steered and need not be listed. Usually
+	// unnecessary: while the gateway accepts routes, MirrorRoutes steers everything it can
+	// reach onto members automatically; Routes is the explicit pin for a fixed set, or for
+	// when MirrorRoutes is off. We dial, not serve: the gateway never ADVERTISES routes.
 	// +optional
 	Routes []string `json:"routes,omitempty"`
 
@@ -84,12 +85,12 @@ type EgressGroupSpec struct {
 	// +optional
 	DNS *MemberDNS `json:"dns,omitempty"`
 
-	// MirrorRoutes steers every route the gateway can reach (peer AllowedIPs + accepted
-	// subnet-router / app-connector CIDRs, minus cluster ranges) onto member pods, so egress
-	// follows DNS resolution — e.g. an app-connector domain resolved via the gateway is then
-	// reachable by the IP it resolved to, with no static spec.routes. Defaults to true when
-	// DNS.Enabled (native-client mode wants resolution and egress to agree). Ignored when
-	// ExitNode is set (the full-tunnel default route already covers everything).
+	// MirrorRoutes steers every route the gateway can reach (the accepted subnet-router /
+	// app-connector CIDRs, minus cluster ranges) onto member pods, so a member reaches
+	// everything the gateway does without listing it in Routes — the native-client behaviour.
+	// Defaults to on whenever the gateway accepts routes (AcceptRoutes, default true); set
+	// false to opt out and steer only Routes. Ignored when ExitNode is set (the full-tunnel
+	// default route already covers everything).
 	// +optional
 	MirrorRoutes *bool `json:"mirrorRoutes,omitempty"`
 
@@ -99,9 +100,19 @@ type EgressGroupSpec struct {
 	Tags []string `json:"tags,omitempty"`
 }
 
-// MirrorRoutesEnabled reports whether the agent should steer the gateway's reachable routes
-// onto members: never under ExitNode (the full tunnel covers it), else the explicit value,
-// else defaulting to on when native DNS is enabled.
+// AcceptRoutesEnabled reports whether the gateway accepts advertised subnet-router and
+// app-connector routes (--accept-routes). Defaults to true.
+func (s *EgressGroupSpec) AcceptRoutesEnabled() bool {
+	if s.AcceptRoutes != nil {
+		return *s.AcceptRoutes
+	}
+	return true
+}
+
+// MirrorRoutesEnabled reports whether the agent steers the gateway's reachable routes onto
+// members: never under ExitNode (the full tunnel covers it), else the explicit value, else
+// defaulting to on whenever the gateway accepts routes — so a member reaches everything the
+// gateway can (the native-client behaviour) without listing Routes.
 func (s *EgressGroupSpec) MirrorRoutesEnabled() bool {
 	if s.ExitNode != nil {
 		return false
@@ -109,7 +120,7 @@ func (s *EgressGroupSpec) MirrorRoutesEnabled() bool {
 	if s.MirrorRoutes != nil {
 		return *s.MirrorRoutes
 	}
-	return s.DNS != nil && s.DNS.Enabled
+	return s.AcceptRoutesEnabled()
 }
 
 // EgressGroupStatus is the observed state of an EgressGroup.

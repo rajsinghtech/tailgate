@@ -138,9 +138,8 @@ full tunnel (set it to your real pod **and** service CIDRs, e.g. `10.244.0.0/16,
 
 ## Usage
 
-Label the workload you want to egress, then declare an `EgressGroup` that selects it. This example
-reaches CGNAT peers plus a `10.0.0.0/8` subnet-router range and accepts whatever routes the tailnet
-advertises:
+Label the workload you want to egress, then declare an `EgressGroup` that selects it — a selector and
+a tag are all you need:
 
 ```yaml
 apiVersion: tailscale.rajsingh.info/v1alpha1
@@ -157,9 +156,6 @@ spec:
         tailgate.dev/egress: "true"
   tags:                      # gateway tailnet tag(s); the OAuth client must own these
     - tag:k8s
-  routes:                    # tailnet CIDRs to steer onto members (CGNAT + ULA are always steered)
-    - 10.0.0.0/8
-  acceptRoutes: true         # accept subnet-router + app-connector routes (default true)
 ```
 
 ```bash
@@ -169,10 +165,10 @@ kubectl get eg
 # payments   4      false  30s
 ```
 
-Any pod matching the selector now reaches `100.64.0.0/10`, the IPv6 ULA, and `10.0.0.0/8` natively
-through the shared gateway — no sidecar, no per-pod annotation, no application changes. A pod that
-doesn't match is untouched. The minimal group is just a selector — members reach CGNAT peers and the
-ULA, with the gateway placed node-local automatically.
+Any pod matching the selector now reaches the **whole tailnet** natively through the shared gateway —
+CGNAT peers (`100.64.0.0/10` + the IPv6 ULA) and, because the gateway accepts and mirrors advertised
+routes by default, every subnet-router and app-connector CIDR the tailnet exposes — no sidecar, no
+per-pod annotation, no per-destination Service. A pod that doesn't match is untouched.
 
 ### What members reach
 
@@ -180,14 +176,18 @@ There is no `mode` field; behaviour follows what you set:
 
 | You set | Members reach |
 |---------|---------------|
-| *(just a selector)* | Tailnet peers by CGNAT IP (`100.64.0.0/10`) and the IPv6 ULA. |
-| `routes: [...]` | The above, plus the advertised subnet-router / app-connector CIDRs you list. |
-| `exitNode: {...}` | Full tunnel — `0.0.0.0/0` and `::/0` through the chosen exit node (composes with the above). |
+| *(just a selector)* | The whole tailnet: peers by CGNAT IP (`100.64.0.0/10` + ULA), plus every advertised subnet-router / app-connector CIDR the gateway accepts (mirrored onto members automatically). |
+| `acceptRoutes: false` | Only CGNAT peers + ULA — the gateway stops pulling in advertised routes, so nothing extra is mirrored. |
+| `routes: [...]` | Pins a specific set of CIDRs to steer (explicit; rarely needed while mirroring is on). |
+| `exitNode: {...}` | Full tunnel — `0.0.0.0/0` and `::/0` through the chosen exit node. |
 | `dns: {enabled: true}` | Native tailnet DNS (see below). |
 
-When a group enables `dns` and isn't using an exit node, the gateway also mirrors the tailnet routes
-it can reach onto members, so app-connector and advertised CIDRs route without being listed in
-`routes` — egress follows what DNS resolves. Force it on or off with `mirrorRoutes: true|false`.
+Two layers are at work. `acceptRoutes` (default true) decides what the **gateway** pulls in from the
+tailnet; the agent then steers those reachable routes onto **members**. `mirrorRoutes` (default on
+whenever the gateway accepts routes) does that steering automatically, so a member reaches everything
+the gateway can — the native-client behaviour. `routes` is the explicit alternative: pin a fixed set,
+or use it when `mirrorRoutes: false`. Set `mirrorRoutes: false` to steer only what you pin, or
+`acceptRoutes: false` to keep members to CGNAT peers.
 
 ### Exit nodes
 

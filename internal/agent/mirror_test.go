@@ -39,17 +39,17 @@ func TestSubtractStrings(t *testing.T) {
 }
 
 func TestMirrorRoutesEnabled(t *testing.T) {
-	dnsOn := &egressv1.MemberDNS{Enabled: true}
 	cases := []struct {
 		name string
 		spec egressv1.EgressGroupSpec
 		want bool
 	}{
-		{"default off", egressv1.EgressGroupSpec{}, false},
-		{"defaults on with dns", egressv1.EgressGroupSpec{DNS: dnsOn}, true},
+		{"default on (accepts routes by default)", egressv1.EgressGroupSpec{}, true},
+		{"acceptRoutes off disables", egressv1.EgressGroupSpec{AcceptRoutes: ptr.To(false)}, false},
 		{"explicit true", egressv1.EgressGroupSpec{MirrorRoutes: ptr.To(true)}, true},
-		{"explicit false beats dns", egressv1.EgressGroupSpec{DNS: dnsOn, MirrorRoutes: ptr.To(false)}, false},
-		{"exit node disables", egressv1.EgressGroupSpec{DNS: dnsOn, ExitNode: &egressv1.ExitNodeRef{Name: "x"}}, false},
+		{"explicit true beats acceptRoutes off", egressv1.EgressGroupSpec{AcceptRoutes: ptr.To(false), MirrorRoutes: ptr.To(true)}, true},
+		{"explicit false opts out", egressv1.EgressGroupSpec{MirrorRoutes: ptr.To(false)}, false},
+		{"exit node disables", egressv1.EgressGroupSpec{ExitNode: &egressv1.ExitNodeRef{Name: "x"}}, false},
 	}
 	for _, c := range cases {
 		if got := c.spec.MirrorRoutesEnabled(); got != c.want {

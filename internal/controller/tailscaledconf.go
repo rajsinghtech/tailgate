@@ -58,8 +58,5 @@ func renderGatewayConfig(eg *egressv1.EgressGroup, exitNodeID string) ([]byte, e
 // acceptRoutes defaults to true (a client egress gateway normally wants whatever the
 // tailnet makes reachable); an explicit spec value wins.
 func acceptRoutes(eg *egressv1.EgressGroup) bool {
-	if eg.Spec.AcceptRoutes != nil {
-		return *eg.Spec.AcceptRoutes
-	}
-	return true
+	return eg.Spec.AcceptRoutesEnabled()
 }
