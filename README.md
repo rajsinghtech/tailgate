@@ -1,7 +1,7 @@
 # tailgate
 
 <p align="center">
-  <strong>Native Tailscale egress for groups of Kubernetes pods — one shared gateway per group.</strong>
+  <strong>Native Tailscale egress for groups of Kubernetes pods — through a shared node-local gateway, not a tailscaled per pod.</strong>
 </p>
 
 <p align="center">
@@ -25,7 +25,7 @@ laptop running Tailscale does.
 ## Features
 
 - **Whole-tailnet egress, natively** — members reach any tailnet peer (`100.64.0.0/10` and the IPv6 ULA), advertised subnet-router CIDR, app-connector range, or full-tunnel exit node, by IP and over any protocol (TCP, UDP, ICMP, …). The gateway is a kernel-mode `tailscaled`, so this is real L3 routing, not an L4 port forward — and there is no per-destination Service to declare.
-- **One device per group** — the gateway is shared, so a group scales from 3 to 3,000 pods without adding devices to the tailnet, and the group's tag is the source identity for all member traffic.
+- **Pods don't add tailnet devices** — the gateway is a node-local DaemonSet (one shared tailnet device per node), so scaling a workload from 3 to 3,000 pods adds no devices; the device count tracks nodes, not pods. All member egress on a node carries the gateway's tag as its source identity.
 - **Dual-stack** — the pod↔gateway veth is dual-stack, so members reach peers over IPv4 and IPv6 regardless of the cluster's own IP family.
 - **Live reconcile** — flip `acceptRoutes`, swap the exit node, or adjust DNS on a running group and the gateway reloads its config in place; member tunnels stay up.
 - **Native tailnet DNS** — opt a group into MagicDNS, the tailnet's split-DNS domains, app-connector names, and global forwarding via a mutating webhook, with `cluster.local` preserved.
@@ -35,7 +35,7 @@ laptop running Tailscale does.
 
 | CRD | Scope | Short | Description |
 |-----|-------|-------|-------------|
-| `EgressGroup` | Cluster | `eg` | A set of pods that egress onto the tailnet through one shared gateway |
+| `EgressGroup` | Cluster | `eg` | A set of pods that egress onto the tailnet through a shared node-local gateway |
 
 API group: `tailscale.rajsingh.info/v1alpha1`.
 
@@ -73,7 +73,7 @@ API group: `tailscale.rajsingh.info/v1alpha1`.
 Three components make up the system (images published to `ghcr.io/rajsinghtech/`):
 
 - **`tailgate-operator`** (Deployment) — a controller-runtime reconciler. For each `EgressGroup` it mints an OAuth authkey tagged with the group's `spec.tags` (default `tag:k8s`) into a Secret, renders a declarative `tailscaled` config (`ipn.ConfigVAlpha`) from the spec into a ConfigMap, and creates the per-group gateway DaemonSet. Everything it creates is owner-referenced for garbage collection, and a finalizer deletes the gateway's tailnet device on teardown.
-- **`tailgate-gateway`** (per-group DaemonSet, privileged) — the shared tailnet node for the group. It runs the official `tailscale/tailscale` image's `tailscaled` in kernel-TUN mode inside its **own** pod network namespace, so each group's `tailscale0` is isolated and the agent can stitch member veths into it. It enables IP forwarding, MASQUERADEs forwarded member traffic onto `tailscale0` (source identity = the group's tag), and `fwmark`s member traffic into a policy table that routes through `tailscale0` — so `tailscaled` sends each destination where its netmap says (a CGNAT peer, an accepted subnet/app-connector CIDR, or the exit node for `0.0.0.0/0`). It watches its config file and calls LocalAPI `ReloadConfig` on change, with no restart, and persists state so the node identity is stable across restarts.
+- **`tailgate-gateway`** (per-group DaemonSet, privileged) — the group's shared tailnet node, **one per node** (a DaemonSet, so a member always has a same-node gateway to veth into; the group therefore has as many tailnet devices as nodes it runs on). It runs the official `tailscale/tailscale` image's `tailscaled` in kernel-TUN mode inside its **own** pod network namespace, so each group's `tailscale0` is isolated and the agent can stitch member veths into it. It enables IP forwarding, MASQUERADEs forwarded member traffic onto `tailscale0` (source identity = the group's tag), and `fwmark`s member traffic into a policy table that routes through `tailscale0` — so `tailscaled` sends each destination where its netmap says (a CGNAT peer, an accepted subnet/app-connector CIDR, or the exit node for `0.0.0.0/0`). It watches its config file and calls LocalAPI `ReloadConfig` on change, with no restart, and persists state so the node identity is stable across restarts.
 - **`tailgate-agent`** (DaemonSet, privileged + `hostPID` + `hostNetwork`) — installs the chained route-only CNI plugin (`tailgate-cni`) into the node's CNI conflist, then watches Pods and `EgressGroup`s. For each pod a group selects, it veth-stitches the pod into that node's group-gateway namespace and installs the tailnet routes (`100.64.0.0/10`, the ULA, and the routes the gateway accepts, mirrored from its netmap) toward the gateway. Membership is a label selector evaluated by an informer — there is no per-pod annotation or NetworkAttachmentDefinition to manage.
 
 A shared per-group gateway keeps the tailnet device count proportional to the number of groups rather than the number of pods, and preserves the group's tag as the source identity for all member traffic.

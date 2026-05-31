@@ -129,7 +129,7 @@ type EgressGroupStatus struct {
 // +kubebuilder:printcolumn:name="DNS",type=boolean,JSONPath=`.spec.dns.enabled`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// EgressGroup is a set of pods that egress onto the tailnet through one shared gateway.
+// EgressGroup is a set of pods that egress onto the tailnet through a shared node-local gateway.
 type EgressGroup struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
