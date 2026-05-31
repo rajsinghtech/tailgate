@@ -51,7 +51,7 @@ func TestAgentRestartNoReWire(t *testing.T) {
 			t.Errorf("LEAKED tailnet %s: %v", eg.DNSName, err)
 		}
 	})
-	must(t, eg.ApplyACL(ctx, []byte(`{"tagOwners":{"tag:ci":["autogroup:admin"],"tag:egress-e2e":["autogroup:admin"]},"grants":[{"src":["*"],"dst":["*"],"ip":["*"]}]}`)), "acl")
+	must(t, eg.ApplyACL(ctx, []byte(`{"tagOwners":{"tag:ci":["autogroup:admin"],"tag:k8s": ["autogroup:admin"]},"grants":[{"src":["*"],"dst":["*"],"ip":["*"]}]}`)), "acl")
 
 	upsertSecret(t, ctx, kc, eg)
 	restartOperator(t, ctx, cs)

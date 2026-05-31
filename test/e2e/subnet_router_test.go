@@ -43,7 +43,7 @@ func TestSubnetRouterReachability(t *testing.T) {
 	must(t, eg.ApplyACL(ctx, []byte(`{
 	  "tagOwners": {
 	    "tag:ci": ["autogroup:admin"],
-	    "tag:egress-subnet": ["autogroup:admin"],
+	    "tag:k8s": ["autogroup:admin"],
 	    "tag:subnet-router": ["autogroup:admin"]
 	  },
 	  "autoApprovers": { "routes": { "`+subnetCIDR+`": ["tag:subnet-router"] } },

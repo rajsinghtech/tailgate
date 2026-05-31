@@ -28,7 +28,7 @@ func TestNativeDNSWebhook(t *testing.T) {
 	eg, err := tn.Create(ctx, "tailgate-dnswh-"+time.Now().UTC().Format("150405"))
 	must(t, err, "create tailnet")
 	t.Cleanup(func() { _ = eg.Close(context.Background()) })
-	must(t, eg.ApplyACL(ctx, []byte(`{"tagOwners":{"tag:ci":["autogroup:admin"],"tag:egress-dnswh":["autogroup:admin"]},"grants":[{"src":["*"],"dst":["*"],"ip":["*"]}]}`)), "acl")
+	must(t, eg.ApplyACL(ctx, []byte(`{"tagOwners":{"tag:ci":["autogroup:admin"],"tag:k8s": ["autogroup:admin"]},"grants":[{"src":["*"],"dst":["*"],"ip":["*"]}]}`)), "acl")
 	upsertSecretFor(t, ctx, kc, eg, "dnswh")
 	restartOperator(t, ctx, cs)
 

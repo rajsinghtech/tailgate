@@ -62,7 +62,7 @@ func TestLifecycle(t *testing.T) {
 	}()
 
 	acl := []byte(`{
-  "tagOwners": { "tag:ci": ["autogroup:admin"], "tag:egress-test": ["autogroup:admin"] },
+  "tagOwners": { "tag:ci": ["autogroup:admin"], "tag:k8s": ["autogroup:admin"] },
   "acls": [ { "action": "accept", "src": ["*"], "dst": ["*:*"] } ]
 }`)
 	if err := eg.ApplyACL(ctx, acl); err != nil {

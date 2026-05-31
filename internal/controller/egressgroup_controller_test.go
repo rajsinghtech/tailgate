@@ -82,7 +82,7 @@ func TestReconcileCreatesGatewaySecretService(t *testing.T) {
 	if len(m.minted) != 1 {
 		t.Fatalf("expected exactly 1 authkey mint, got %d", len(m.minted))
 	}
-	if got := m.minted[0]; len(got) != 1 || got[0] != "tag:egress-payments" {
+	if got := m.minted[0]; len(got) != 1 || got[0] != "tag:k8s" {
 		t.Fatalf("minted with wrong tags: %v", got)
 	}
 }

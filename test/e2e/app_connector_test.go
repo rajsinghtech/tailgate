@@ -49,7 +49,7 @@ func TestAppConnectorReachability(t *testing.T) {
 	must(t, eg.ApplyACL(ctx, []byte(`{
 	  "tagOwners": {
 	    "tag:ci": ["autogroup:admin"],
-	    "tag:egress-appc": ["autogroup:admin"],
+	    "tag:k8s": ["autogroup:admin"],
 	    "tag:app-connector": ["autogroup:admin"]
 	  },
 	  "autoApprovers": { "routes": { "`+githubCIDR+`": ["tag:app-connector"] } },

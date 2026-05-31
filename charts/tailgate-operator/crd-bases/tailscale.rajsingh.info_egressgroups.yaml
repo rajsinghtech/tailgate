@@ -230,7 +230,9 @@ spec:
                     x-kubernetes-map-type: atomic
                 type: object
               tags:
-                description: Tags for the gateway tailnet node. Defaults to ["tag:egress-<name>"].
+                description: |-
+                  Tags for the gateway tailnet node. The OAuth client must own these. Defaults to
+                  ["tag:k8s"] (the Tailscale operator's convention) when unset.
                 items:
                   type: string
                 type: array

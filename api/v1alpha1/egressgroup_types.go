@@ -93,7 +93,8 @@ type EgressGroupSpec struct {
 	// +optional
 	MirrorRoutes *bool `json:"mirrorRoutes,omitempty"`
 
-	// Tags for the gateway tailnet node. Defaults to ["tag:egress-<name>"].
+	// Tags for the gateway tailnet node. The OAuth client must own these. Defaults to
+	// ["tag:k8s"] (the Tailscale operator's convention) when unset.
 	// +optional
 	Tags []string `json:"tags,omitempty"`
 }

@@ -91,7 +91,7 @@ func TestEgressDatapath(t *testing.T) {
 			t.Logf("deleted tailnet %s", eg.DNSName)
 		}
 	})
-	must(t, eg.ApplyACL(ctx, []byte(`{"tagOwners":{"tag:ci":["autogroup:admin"],"tag:egress-e2e":["autogroup:admin"]},"grants":[{"src":["*"],"dst":["*"],"ip":["*"]}]}`)), "acl")
+	must(t, eg.ApplyACL(ctx, []byte(`{"tagOwners":{"tag:ci":["autogroup:admin"],"tag:k8s": ["autogroup:admin"]},"grants":[{"src":["*"],"dst":["*"],"ip":["*"]}]}`)), "acl")
 
 	// 2. point the operator at this tailnet + restart it.
 	upsertSecret(t, ctx, kc, eg)
