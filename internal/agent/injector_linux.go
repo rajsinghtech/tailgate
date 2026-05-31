@@ -143,7 +143,7 @@ func alreadyWired(memberNs, gwNsPath, gwName string) bool {
 // if the member is already stitched to this gateway the veth is left in place and only
 // the addrs/routes are re-applied (all Replace ops), so an agent restart — which starts
 // with an empty wiring map and re-Wires every member — never flaps live egress.
-func Wire(info netinfo.PodNetInfo, gwNsPath string, routes []string, exit *ExitOpts) error {
+func Wire(info netinfo.PodNetInfo, gwNsPath string, routes, stale []string, exit *ExitOpts) error {
 	if err := ensureGatewayBridge(gwNsPath); err != nil {
 		return err
 	}
@@ -258,6 +258,13 @@ func Wire(info netinfo.PodNetInfo, gwNsPath string, routes []string, exit *ExitO
 			return err
 		}
 		idx := l.Attrs().Index
+		// Withdraw routes no longer mirrored from the gateway (e.g. an app-connector /32 the
+		// gateway stopped advertising). Best-effort: ignore if already gone.
+		for _, c := range stale {
+			if dst := ipnet(c); dst != nil {
+				_ = netlink.RouteDel(&netlink.Route{LinkIndex: idx, Dst: dst})
+			}
+		}
 		for _, c := range routes {
 			dst := ipnet(c)
 			if dst == nil {

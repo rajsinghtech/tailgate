@@ -53,10 +53,20 @@ spec:
         # the API server never blackhole through the full tunnel.
         - name: TAILGATE_CLUSTER_CIDRS
           value: {{ .Values.agent.clusterCIDRs | quote }}
+        volumeMounts:
+        # Routes the per-node gateways publish for MirrorRoutes (egress-follows-DNS).
+        - name: run
+          mountPath: /run/tailgate
+          readOnly: true
         {{- with .Values.agent.resources }}
         resources:
           {{- toYaml . | nindent 10 }}
         {{- end }}
+      volumes:
+      - name: run
+        hostPath:
+          path: /run/tailgate
+          type: DirectoryOrCreate
       {{- with .Values.agent.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

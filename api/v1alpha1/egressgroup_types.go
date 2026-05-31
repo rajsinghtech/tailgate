@@ -75,9 +75,31 @@ type EgressGroupSpec struct {
 	// +optional
 	DNS *MemberDNS `json:"dns,omitempty"`
 
+	// MirrorRoutes steers every route the gateway can reach (peer AllowedIPs + accepted
+	// subnet-router / app-connector CIDRs, minus cluster ranges) onto member pods, so egress
+	// follows DNS resolution — e.g. an app-connector domain resolved via the gateway is then
+	// reachable by the IP it resolved to, with no static spec.routes. Defaults to true when
+	// DNS.Enabled (native-client mode wants resolution and egress to agree). Ignored when
+	// ExitNode is set (the full-tunnel default route already covers everything).
+	// +optional
+	MirrorRoutes *bool `json:"mirrorRoutes,omitempty"`
+
 	// Tags for the gateway tailnet node. Defaults to ["tag:egress-<name>"].
 	// +optional
 	Tags []string `json:"tags,omitempty"`
+}
+
+// MirrorRoutesEnabled reports whether the agent should steer the gateway's reachable routes
+// onto members: never under ExitNode (the full tunnel covers it), else the explicit value,
+// else defaulting to on when native DNS is enabled.
+func (s *EgressGroupSpec) MirrorRoutesEnabled() bool {
+	if s.ExitNode != nil {
+		return false
+	}
+	if s.MirrorRoutes != nil {
+		return *s.MirrorRoutes
+	}
+	return s.DNS != nil && s.DNS.Enabled
 }
 
 // EgressGroupStatus is the observed state of an EgressGroup.

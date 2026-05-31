@@ -5,6 +5,10 @@ package agent
 import (
 	"context"
 	"log/slog"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -13,6 +17,69 @@ import (
 	egressv1 "github.com/rajsinghtech/tailgate/api/v1alpha1"
 	"github.com/rajsinghtech/tailgate/internal/netinfo"
 )
+
+const mirrorDir = "/run/tailgate" // hostPath the gateway publishes <group>.routes into
+
+// mirroredRoutes reads the gateway's published reachable routes for a MirrorRoutes-enabled
+// group (subnet-router + app-connector CIDRs), dropping any that overlap cluster ranges so
+// cluster traffic is never steered into the gateway. Returns nil (no mirroring) otherwise.
+func (a *Agent) mirroredRoutes(group string, g *egressv1.EgressGroup) []string {
+	if g == nil || !g.Spec.MirrorRoutesEnabled() {
+		return nil
+	}
+	b, err := os.ReadFile(filepath.Join(mirrorDir, group+".routes"))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		if line = strings.TrimSpace(line); line == "" || a.overlapsCluster(line) {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+func (a *Agent) overlapsCluster(cidr string) bool {
+	p, err := netip.ParsePrefix(cidr)
+	if err != nil {
+		return true // unparseable -> don't steer it
+	}
+	for _, c := range a.ClusterCIDRs {
+		if cp, err := netip.ParsePrefix(strings.TrimSpace(c)); err == nil && cp.Overlaps(p) {
+			return true
+		}
+	}
+	return false
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// subtractStrings returns the elements of a that are not in b.
+func subtractStrings(a, b []string) []string {
+	in := make(map[string]bool, len(b))
+	for _, s := range b {
+		in[s] = true
+	}
+	var out []string
+	for _, s := range a {
+		if !in[s] {
+			out = append(out, s)
+		}
+	}
+	return out
+}
 
 const groupLabel = "tailgate.dev/group"
 
@@ -29,8 +96,9 @@ type Agent struct {
 }
 
 type wired struct {
-	info netinfo.PodNetInfo
-	gwNs string
+	info     netinfo.PodNetInfo
+	gwNs     string
+	mirrored []string // routes mirrored from the gateway's netmap (sorted; for diff + withdrawal)
 }
 
 // Run polls every interval until ctx is done, wiring member pods and unwiring gone ones.
@@ -85,9 +153,11 @@ func (a *Agent) sync(ctx context.Context, done map[string]wired) error {
 			a.Log.Warn("gateway netns not ready", "group", grp, "err", err)
 			continue
 		}
-		// Already wired to the CURRENT gateway? nothing to do. (If the gateway pod
-		// restarted, its netns changed -> re-wire below.)
-		if w, ok := done[ip]; ok && w.gwNs == gwNs {
+		g := findGroup(groups.Items, grp)
+		mir := a.mirroredRoutes(grp, g) // nil unless MirrorRoutes is enabled
+		// Already wired to the CURRENT gateway with the SAME mirrored routes? nothing to do.
+		// (A gateway restart changes the netns; a netmap change changes mir -> re-wire.)
+		if w, ok := done[ip]; ok && w.gwNs == gwNs && equalStrings(w.mirrored, mir) {
 			continue
 		}
 		memberNs, err := netnsForPodUID(string(p.UID))
@@ -96,17 +166,20 @@ func (a *Agent) sync(ctx context.Context, done map[string]wired) error {
 			continue
 		}
 		info := netinfo.PodNetInfo{PodIP: ip, Netns: memberNs, IfName: "eth0"}
-		g := findGroup(groups.Items, grp)
 		var exit *ExitOpts
 		if g != nil && g.Spec.ExitNode != nil {
 			exit = &ExitOpts{ClusterCIDRs: a.ClusterCIDRs}
 		}
-		if err := Wire(info, gwNs, routeSet(g), exit); err != nil {
+		var stale []string
+		if w, ok := done[ip]; ok {
+			stale = subtractStrings(w.mirrored, mir) // mirrored routes withdrawn since last wire
+		}
+		if err := Wire(info, gwNs, append(routeSet(g), mir...), stale, exit); err != nil {
 			a.Log.Error("wire", "pod", p.Name, "err", err)
 			continue
 		}
-		a.Log.Info("wired member to gateway", "pod", p.Name, "group", grp, "ip", ip, "gwNs", gwNs)
-		done[ip] = wired{info: info, gwNs: gwNs}
+		a.Log.Info("wired member to gateway", "pod", p.Name, "group", grp, "ip", ip, "gwNs", gwNs, "mirrored", len(mir))
+		done[ip] = wired{info: info, gwNs: gwNs, mirrored: mir}
 	}
 
 	for ip, w := range done {

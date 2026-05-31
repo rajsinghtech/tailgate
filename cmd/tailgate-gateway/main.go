@@ -118,11 +118,17 @@ func run() {
 	must("masquerade + mark", dp.SetupMASQUERADE(gwBridge, fwMark, "tailscale0"))
 	must("policy routing", netfilter.SetupPolicyRouting(fwMark, fwTable, "tailscale0"))
 
-	fmt.Println("tailgate-gateway up:", getenv("TS_GROUP", "?"))
+	group := getenv("TS_GROUP", "default")
+	fmt.Println("tailgate-gateway up:", group)
+
+	lc := &local.Client{Socket: sock}
+	// Publish the gateway's reachable routes for the agent to mirror onto members (so egress
+	// follows DNS resolution). /run/tailgate is the hostPath shared with the agent.
+	go publishRoutes(context.Background(), lc, group, "/run/tailgate")
 
 	// Watch the config file and hot-reload tailscaled prefs on change (exit node,
 	// accept-routes, DNS) without a restart.
-	watchConfig(context.Background(), &local.Client{Socket: sock}, configPath)
+	watchConfig(context.Background(), lc, configPath)
 }
 
 // watchConfig polls the config file and triggers a LocalAPI reload when its content
