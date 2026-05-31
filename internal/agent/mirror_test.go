@@ -49,7 +49,7 @@ func TestMirrorRoutesEnabled(t *testing.T) {
 		{"defaults on with dns", egressv1.EgressGroupSpec{DNS: dnsOn}, true},
 		{"explicit true", egressv1.EgressGroupSpec{MirrorRoutes: ptr.To(true)}, true},
 		{"explicit false beats dns", egressv1.EgressGroupSpec{DNS: dnsOn, MirrorRoutes: ptr.To(false)}, false},
-		{"exit node disables", egressv1.EgressGroupSpec{DNS: dnsOn, ExitNode: &egressv1.ExitNodeRef{NodeID: "x"}}, false},
+		{"exit node disables", egressv1.EgressGroupSpec{DNS: dnsOn, ExitNode: &egressv1.ExitNodeRef{Name: "x"}}, false},
 	}
 	for _, c := range cases {
 		if got := c.spec.MirrorRoutesEnabled(); got != c.want {

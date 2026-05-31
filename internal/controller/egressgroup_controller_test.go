@@ -23,7 +23,7 @@ func (m *mockTS) MintAuthKey(_ context.Context, tags []string) (string, error) {
 	return "tskey-auth-test", nil
 }
 func (m *mockTS) DeleteDeviceByHostname(context.Context, string) error { return nil }
-func (m *mockTS) ResolveExitNode(context.Context, string, string) (string, error) {
+func (m *mockTS) ResolveExitNode(context.Context) (string, error) {
 	return "100.64.0.42", nil
 }
 

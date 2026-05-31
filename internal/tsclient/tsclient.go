@@ -10,7 +10,6 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
-	"strings"
 	"time"
 
 	tsapi "tailscale.com/client/tailscale/v2"
@@ -24,9 +23,9 @@ const authKeyTTL = 90 * 24 * time.Hour
 type Client interface {
 	MintAuthKey(ctx context.Context, tags []string) (string, error)
 	DeleteDeviceByHostname(ctx context.Context, hostname string) error
-	// ResolveExitNode returns the tailnet IP of an eligible exit node (advertises 0.0.0.0/0),
-	// optionally narrowed by tag and/or a tag:exit-<region> location tag.
-	ResolveExitNode(ctx context.Context, tag, region string) (string, error)
+	// ResolveExitNode returns the tailnet IP of an eligible exit node — one advertising the
+	// default route (0.0.0.0/0), preferring a control-connected node. Resolves "auto".
+	ResolveExitNode(ctx context.Context) (string, error)
 }
 
 type api struct{ ts *tsapi.Client }
@@ -78,9 +77,10 @@ func (a *api) DeleteDeviceByHostname(ctx context.Context, hostname string) error
 }
 
 // ResolveExitNode returns the tailnet IPv4 of an eligible exit node — one advertising the
-// default route (0.0.0.0/0), optionally filtered to a tag and/or a tag:exit-<region> location
-// tag. Prefers a control-connected (online) node; the returned IP is what the gateway pins.
-func (a *api) ResolveExitNode(ctx context.Context, tag, region string) (string, error) {
+// default route (0.0.0.0/0) — preferring a control-connected (online) node. The returned IP is
+// the concrete node the gateway pins, since the declarative tailscaled config cannot express
+// "auto" (the conffile parses a non-IP exit-node string as a literal node ID, not an expression).
+func (a *api) ResolveExitNode(ctx context.Context) (string, error) {
 	devices, err := a.ts.Devices().List(ctx, tsapi.WithFields(tsapi.IncludeFieldsAll))
 	if err != nil {
 		return "", fmt.Errorf("list devices: %w", err)
@@ -88,7 +88,7 @@ func (a *api) ResolveExitNode(ctx context.Context, tag, region string) (string, 
 	var fallback string
 	for i := range devices {
 		d := &devices[i]
-		if !advertisesDefault(d.AdvertisedRoutes) || !matchesExitFilter(d.Tags, tag, region) {
+		if !advertisesDefault(d.AdvertisedRoutes) {
 			continue
 		}
 		addr := tailnetV4(d.Addresses)
@@ -105,7 +105,7 @@ func (a *api) ResolveExitNode(ctx context.Context, tag, region string) (string, 
 	if fallback != "" {
 		return fallback, nil
 	}
-	return "", fmt.Errorf("no eligible exit node (tag=%q region=%q)", tag, region)
+	return "", fmt.Errorf("no eligible exit node advertising 0.0.0.0/0")
 }
 
 func advertisesDefault(routes []string) bool {
@@ -117,16 +117,6 @@ func advertisesDefault(routes []string) bool {
 	return false
 }
 
-func matchesExitFilter(tags []string, tag, region string) bool {
-	if tag != "" && !sliceContains(tags, tag) {
-		return false
-	}
-	if region != "" && !sliceContains(tags, "tag:exit-"+strings.ToLower(region)) {
-		return false
-	}
-	return true
-}
-
 func tailnetV4(addrs []string) string {
 	for _, a := range addrs {
 		if ip, err := netip.ParseAddr(a); err == nil && ip.Is4() {
@@ -134,13 +124,4 @@ func tailnetV4(addrs []string) string {
 		}
 	}
 	return ""
-}
-
-func sliceContains(ss []string, s string) bool {
-	for _, x := range ss {
-		if x == s {
-			return true
-		}
-	}
-	return false
 }

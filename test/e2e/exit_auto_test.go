@@ -1,9 +1,9 @@
 //go:build e2e
 
-// Exit-node AUTO-selection e2e: an EgressGroup with exitNode.auto (narrowed to tag:exit-node)
-// makes the OPERATOR resolve a concrete exit node from the tailnet Devices API and pin it.
-// Proves the resolution wires through to status.resolvedExitNode, the gateway commits the
-// exit node, and the member gets full-tunnel plumbing — all without a hand-typed nodeID.
+// Exit-node AUTO-selection e2e: an EgressGroup with exitNode.name "auto" makes the OPERATOR
+// resolve a concrete exit node from the tailnet Devices API and pin it (the declarative config
+// can't carry "auto"). Proves the resolution wires through to status.resolvedExitNode, the
+// gateway commits the exit node, and the member gets full-tunnel plumbing — no hand-typed ref.
 package e2e
 
 import (
@@ -49,13 +49,14 @@ func TestExitNodeAutoSelect(t *testing.T) {
 	exitCGNAT, _ := startExitNodePod(t, ctx, cfg, cs, ekey)
 	t.Logf("exit node cgnat=%s", exitCGNAT)
 
-	// EgressGroup with NO nodeID — the operator must auto-resolve the tag:exit-node node.
+	// EgressGroup with exitNode name "auto" — no explicit ref, so the operator must resolve a
+	// concrete eligible exit node itself (there is exactly one in this tailnet).
 	name := "exitauto"
 	forceCleanEG(t, ctx, cs, kc, name)
 	must(t, kc.Create(ctx, &egressv1.EgressGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: egressv1.EgressGroupSpec{
-			ExitNode: &egressv1.ExitNodeRef{Auto: true, Tag: "tag:exit-node"},
+			ExitNode: &egressv1.ExitNodeRef{Name: "auto"},
 			Selector: egressv1.EgressSelector{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"egress": name}}},
 		},
 	}), "create egressgroup")
@@ -76,7 +77,7 @@ func TestExitNodeAutoSelect(t *testing.T) {
 	if got.Status.ResolvedExitNode != exitCGNAT {
 		t.Fatalf("resolvedExitNode = %q, want the exit node %q", got.Status.ResolvedExitNode, exitCGNAT)
 	}
-	t.Logf("PASS: operator auto-resolved exit node %s (no nodeID set)", got.Status.ResolvedExitNode)
+	t.Logf("PASS: operator auto-resolved exit node %s (name=auto)", got.Status.ResolvedExitNode)
 
 	waitGatewayReady(t, ctx, cs, name)
 

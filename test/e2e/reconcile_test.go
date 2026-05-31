@@ -181,7 +181,7 @@ func patchExitNode(t *testing.T, ctx context.Context, kc ctrlclient.Client, name
 	t.Helper()
 	var eg egressv1.EgressGroup
 	must(t, kc.Get(ctx, types.NamespacedName{Name: name}, &eg), "get egressgroup")
-	eg.Spec.ExitNode = &egressv1.ExitNodeRef{NodeID: nodeID}
+	eg.Spec.ExitNode = &egressv1.ExitNodeRef{Name: nodeID}
 	must(t, kc.Update(ctx, &eg), "patch exitNode")
 }
 
