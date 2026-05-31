@@ -55,7 +55,7 @@ func tagsFor(eg *egressv1.EgressGroup) []string {
 	if len(eg.Spec.Tags) > 0 {
 		return eg.Spec.Tags
 	}
-	return []string{"tag:egress-" + eg.Name}
+	return []string{"tag:k8s"} // Tailscale operator convention; the OAuth client owns it
 }
 
 // gatewayDaemonSet builds the per-group gateway: a node-local DaemonSet running

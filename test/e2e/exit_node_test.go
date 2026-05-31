@@ -40,7 +40,7 @@ func TestExitNodeFullTunnel(t *testing.T) {
 	must(t, eg.ApplyACL(ctx, []byte(`{
 	  "tagOwners": {
 	    "tag:ci": ["autogroup:admin"],
-	    "tag:egress-exit": ["autogroup:admin"],
+	    "tag:k8s": ["autogroup:admin"],
 	    "tag:exit-node": ["autogroup:admin"]
 	  },
 	  "autoApprovers": { "exitNode": ["tag:exit-node"] },
