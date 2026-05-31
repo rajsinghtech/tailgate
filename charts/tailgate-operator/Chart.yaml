@@ -2,8 +2,8 @@ apiVersion: v2
 name: tailgate-operator
 description: A Kubernetes operator that gives pods native Tailscale egress through a shared tailscaled gateway per EgressGroup
 type: application
-version: 0.0.1
-appVersion: "0.0.1"
+version: 0.0.3
+appVersion: "0.0.3"
 kubeVersion: ">=1.25.0-0"
 home: https://github.com/rajsinghtech/tailgate
 sources:
