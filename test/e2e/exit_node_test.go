@@ -97,6 +97,15 @@ func TestExitNodeFullTunnel(t *testing.T) {
 	}
 	t.Log("PASS: member full-tunnel policy routing installed (table 7717)")
 
+	// 6b. ts0 must carry the tunnel MTU (1280, not the veth default 1500) so the member
+	// negotiates a TCP MSS that fits the tailscale0 path — otherwise large segments (a TLS
+	// ServerHello) blackhole over a relayed/exit-node path while ICMP/DNS still work.
+	link, _, _ := execPod(ctx, cfg, cs, member, []string{"ip", "-o", "link", "show", "ts0"})
+	if !strings.Contains(link, "mtu 1280") {
+		t.Fatalf("member ts0 MTU is not 1280 (full-tunnel large segments would blackhole): %q", strings.TrimSpace(link))
+	}
+	t.Log("PASS: member ts0 MTU = 1280 (matches the tunnel)")
+
 	// 7. cluster survival: kube-dns must still resolve (cluster-CIDR carve-out works) — proves
 	// the proof below isn't a degenerate "everything is broken" pass.
 	must(t, wait.PollUntilContextTimeout(ctx, 3*time.Second, 60*time.Second, true, func(ctx context.Context) (bool, error) {

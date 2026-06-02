@@ -24,6 +24,13 @@ const (
 	gwIP6   = "fd96:7467::1"
 	gwCIDR6 = "fd96:7467::1/64"
 	podIf   = "ts0"
+	// tunMTU matches the gateway's tailscale0 MTU (Tailscale's standard 1280). The member
+	// egresses all tailnet traffic through that TUN, so ts0 must carry the same MTU. With the
+	// default 1500 the member negotiates a 1460 TCP MSS and large segments (e.g. a TLS
+	// ServerHello) blackhole on the smaller tunnel — PMTUD is unreliable over relayed/DERP
+	// exit-node paths, so this surfaced as full-tunnel egress hanging on HTTPS while ICMP/DNS
+	// worked. Setting ts0=1280 makes the member a correct 1280-MTU tailnet client.
+	tunMTU = 1280
 )
 
 func podHash(podIP string) uint32 {
@@ -253,6 +260,13 @@ func Wire(info netinfo.PodNetInfo, gwNsPath string, routes, stale []string, exit
 		}
 		if err := netlink.AddrReplace(l, addr6); err != nil {
 			return fmt.Errorf("member v6 addr: %w", err)
+		}
+		// Match the gateway's tailscale0 MTU so member TCP negotiates an MSS that fits the
+		// tunnel (no large-segment blackhole over relayed exit-node paths). Idempotent.
+		if l.Attrs().MTU != tunMTU {
+			if err := netlink.LinkSetMTU(l, tunMTU); err != nil {
+				return fmt.Errorf("member ts0 mtu: %w", err)
+			}
 		}
 		if err := netlink.LinkSetUp(l); err != nil {
 			return err
