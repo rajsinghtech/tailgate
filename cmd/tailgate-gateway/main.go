@@ -16,12 +16,16 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"tailscale.com/client/local"
+	"tailscale.com/ipn"
 
 	"github.com/rajsinghtech/tailgate/internal/netfilter"
 )
@@ -29,7 +33,11 @@ import (
 const (
 	sock       = "/var/run/tailscale/tailscaled.sock"
 	configPath = "/etc/tailgate/tailscaled.json"
-	gwBridge   = "tgbr0" // the agent enslaves member veths here (must match internal/agent)
+	// effConfigPath is the per-node effective config: the ConfigMap config with Hostname
+	// suffixed by the node name. The ConfigMap mount is read-only and shared across the
+	// DaemonSet, so the per-node hostname can't live there — we write it to the state dir.
+	effConfigPath = "/var/lib/tailscale/effective-tailscaled.json"
+	gwBridge      = "tgbr0" // the agent enslaves member veths here (must match internal/agent)
 
 	fwMark  uint32 = 0x7717 // member traffic mark (must match the policy-routing rule)
 	fwTable int    = 7717   // policy routing table the mark steers into
@@ -68,11 +76,90 @@ func liveMain() int {
 	return 0
 }
 
+// prepareConfig reads the operator-rendered config at src and, when nodeName is set, rewrites
+// the Hostname to "<hostname>-<node>" so each per-node gateway is a distinct, traceable device
+// in the tailnet (the ConfigMap hostname is shared across the DaemonSet). It writes the result
+// to effConfigPath and returns the path tailscaled should load as --config; with no nodeName it
+// returns src unchanged.
+func prepareConfig(src, nodeName string) (string, error) {
+	if strings.TrimSpace(nodeName) == "" {
+		return src, nil
+	}
+	b, err := os.ReadFile(src)
+	if err != nil {
+		return "", err
+	}
+	var cfg ipn.ConfigVAlpha
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		return "", fmt.Errorf("parse config: %w", err)
+	}
+	base := ""
+	if cfg.Hostname != nil {
+		base = *cfg.Hostname
+	}
+	hn := withNode(base, nodeName)
+	cfg.Hostname = &hn
+	out, err := json.Marshal(cfg)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(effConfigPath), 0o700); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(effConfigPath, out, 0o600); err != nil {
+		return "", err
+	}
+	return effConfigPath, nil
+}
+
+// withNode appends a DNS-label-sanitized node name to base, keeping the result within the
+// 63-char tailscale hostname / DNS-label limit (the node part is truncated if needed).
+func withNode(base, node string) string {
+	n := sanitizeLabel(node)
+	if n == "" {
+		return base
+	}
+	const max = 63
+	if room := max - len(base) - 1; room < len(n) {
+		if room < 1 {
+			return base // base already at the limit
+		}
+		n = strings.TrimRight(n[:room], "-")
+	}
+	return base + "-" + n
+}
+
+// sanitizeLabel lowercases s and reduces it to a DNS label: [a-z0-9-], collapsing runs of
+// other characters to a single '-' and trimming leading/trailing '-'.
+func sanitizeLabel(s string) string {
+	var b strings.Builder
+	prevDash := false
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+			prevDash = false
+		default:
+			if !prevDash && b.Len() > 0 {
+				b.WriteByte('-')
+				prevDash = true
+			}
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
 func run() {
 	must("ensure tun", ensureTun())
 	// Enable forwarding + relax rp_filter (member egress is policy-routed asymmetrically).
 	// NetfilterMode=off in the config keeps tailscaled out of netfilter so we own the datapath.
 	must("forwarding/rp_filter", netfilter.EnableForwardingAndRelaxRPFilter())
+
+	// Per-node effective config: suffix the (shared) hostname with this node so each gateway
+	// device is traceable to its node in the tailnet. No-op when NODE_NAME is unset.
+	nodeName := getenv("NODE_NAME", "")
+	cfgPath, err := prepareConfig(configPath, nodeName)
+	must("prepare config", err)
 
 	// tailscaled in the background, driven by the declarative --config file. Enabled=true
 	// in the config brings the node up; the authkey (file:) carries the tags. Persistent
@@ -85,7 +172,7 @@ func run() {
 			"--state=/var/lib/tailscale/tailscaled.state",
 			"--socket="+sock,
 			"--tun=tailscale0",
-			"--config="+configPath,
+			"--config="+cfgPath,
 		)
 		c.Stdout, c.Stderr = os.Stdout, os.Stderr
 		if err := c.Run(); err != nil {
@@ -128,15 +215,15 @@ func run() {
 
 	// Watch the config file and hot-reload tailscaled prefs on change (exit node,
 	// accept-routes, DNS) without a restart.
-	watchConfig(context.Background(), lc, configPath)
+	watchConfig(context.Background(), lc, configPath, nodeName)
 }
 
 // watchConfig polls the config file and triggers a LocalAPI reload when its content
 // changes. A content hash (not mtime) avoids spurious reloads; projected ConfigMap
 // volumes swap a symlink on update, which os.ReadFile follows transparently. Kubelet
 // propagation is the real latency floor (~minute); a short poll just debounces.
-func watchConfig(ctx context.Context, lc *local.Client, path string) {
-	last := hashFile(path)
+func watchConfig(ctx context.Context, lc *local.Client, src, nodeName string) {
+	last := hashFile(src)
 	t := time.NewTicker(3 * time.Second)
 	defer t.Stop()
 	for {
@@ -145,8 +232,14 @@ func watchConfig(ctx context.Context, lc *local.Client, path string) {
 			return
 		case <-t.C:
 		}
-		h := hashFile(path)
+		h := hashFile(src)
 		if h == last || h == ([32]byte{}) {
+			continue
+		}
+		// Regenerate the per-node effective config from the updated ConfigMap before reload,
+		// so the hostname suffix survives hot-reloads (tailscaled re-reads its --config path).
+		if _, err := prepareConfig(src, nodeName); err != nil {
+			fmt.Fprintln(os.Stderr, "prepare config (will retry):", err)
 			continue
 		}
 		// Commit the hash only on a successful reload; a failed reload leaves `last`

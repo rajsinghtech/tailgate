@@ -65,11 +65,14 @@ func tagsFor(eg *egressv1.EgressGroup) []string {
 // Node-local so member pods always have a same-node gateway to be wired to.
 func gatewayDaemonSet(eg *egressv1.EgressGroup, ns, gwImage, tailnet string) *appsv1.DaemonSet {
 	l := gatewayLabels(eg.Name)
-	// Node config (accept-routes, exit-node, DNS, hostname) and the authkey are delivered
-	// as files under /etc/tailgate, not env: the config is a watched ConfigMap (hot-reload)
-	// and tags ride on the authkey. TS_GROUP is informational.
+	// Node config (accept-routes, exit-node, DNS) and the authkey are delivered as files under
+	// /etc/tailgate, not env: the config is a watched ConfigMap (hot-reload) and tags ride on
+	// the authkey. TS_GROUP is informational. NODE_NAME (downward API) lets the entrypoint
+	// append the node to the tailnet hostname (tailgate-gw-<group>-<node>) so each per-node
+	// gateway device is distinguishable in the tailnet — the config's hostname is shared.
 	env := []corev1.EnvVar{
 		{Name: "TS_GROUP", Value: eg.Name},
+		{Name: "NODE_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"}}},
 	}
 	hpType := corev1.HostPathDirectoryOrCreate
 	return &appsv1.DaemonSet{
