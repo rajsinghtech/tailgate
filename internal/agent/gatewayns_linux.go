@@ -21,12 +21,24 @@ func normalizeUID(s string) string {
 	return b.String()
 }
 
-// netnsForPodUID finds a process belonging to the pod with the given UID (requires
-// hostPID so /proc shows node processes) and returns its netns path. Used for both
-// the gateway pod and member pods.
+// netnsForPodUID finds a LIVE process belonging to the pod with the given UID (requires
+// hostPID so /proc shows node processes) and returns its netns path. Used for both the
+// gateway pod and member pods.
 func netnsForPodUID(podUID string) (string, error) {
+	return netnsForPodUIDIn("/proc", podUID)
+}
+
+// netnsForPodUIDIn is netnsForPodUID against an explicit /proc root (for tests).
+//
+// A pod's processes all share one netns, so any live one is correct. We must NOT return
+// the first cgroup match blindly: a zombie or just-exited process (e.g. a `kubectl exec`
+// into the gateway) lingers in /proc with a readable cgroup but no usable ns/net. Returning
+// such a path makes every member that shares this (gateway) netns fail to wire with
+// "open netns ...: no such file or directory". So skip any match whose ns/net can't be
+// stat'd and keep scanning for a live one.
+func netnsForPodUIDIn(procRoot, podUID string) (string, error) {
 	want := normalizeUID(podUID)
-	entries, err := os.ReadDir("/proc")
+	entries, err := os.ReadDir(procRoot)
 	if err != nil {
 		return "", err
 	}
@@ -38,13 +50,18 @@ func netnsForPodUID(podUID string) (string, error) {
 		if pid[0] < '0' || pid[0] > '9' {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join("/proc", pid, "cgroup"))
+		b, err := os.ReadFile(filepath.Join(procRoot, pid, "cgroup"))
 		if err != nil {
 			continue
 		}
-		if strings.Contains(normalizeUID(string(b)), want) {
-			return filepath.Join("/proc", pid, "ns", "net"), nil
+		if !strings.Contains(normalizeUID(string(b)), want) {
+			continue
 		}
+		nsPath := filepath.Join(procRoot, pid, "ns", "net")
+		if _, err := os.Stat(nsPath); err != nil {
+			continue // dead/zombie process: cgroup lingers but the netns is gone
+		}
+		return nsPath, nil
 	}
-	return "", fmt.Errorf("no process found for pod uid %s (hostPID enabled?)", podUID)
+	return "", fmt.Errorf("no live process with a netns found for pod uid %s (hostPID enabled?)", podUID)
 }
