@@ -66,7 +66,7 @@ func TestGatewayHostnamePerNode(t *testing.T) {
 		if pod == nil || pod.Spec.NodeName == "" {
 			return false, nil
 		}
-		out, _, e := execPod(ctx, cfg, cs, pod.Name, []string{"tailscale", "status", "--json"})
+		out, _, e := execPod(ctx, cfg, cs, pod.Name, []string{"tailscale", "--socket=/var/run/tailscale/tailscaled.sock", "status", "--json"})
 		if e != nil {
 			return false, nil // pod momentarily gone / not yet up
 		}
