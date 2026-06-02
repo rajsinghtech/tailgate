@@ -13,7 +13,9 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 
 	egressv1 "github.com/rajsinghtech/tailgate/api/v1alpha1"
 )
@@ -45,24 +47,40 @@ func TestGatewayHostnamePerNode(t *testing.T) {
 	t.Cleanup(func() { deleteEGWait(kc, name) })
 	waitGatewayReady(t, ctx, cs, name)
 
-	gw := gatewayPod(t, ctx, cs, name)
-	node := gw.Spec.NodeName
-	if node == "" {
-		t.Fatal("gateway pod has no nodeName")
+	// Re-fetch the current gateway pod each iteration (the DaemonSet can briefly roll a pod
+	// during operator settling) and tolerate transient exec errors. kind node names are clean
+	// DNS labels, so sanitizeLabel(node) == node and we can assert exact equality.
+	var last string
+	err = wait.PollUntilContextTimeout(ctx, 4*time.Second, 120*time.Second, true, func(ctx context.Context) (bool, error) {
+		pods, e := cs.CoreV1().Pods(tgNS).List(ctx, metav1.ListOptions{LabelSelector: "tailgate.dev/group=" + name})
+		if e != nil {
+			return false, nil
+		}
+		var pod *corev1.Pod
+		for i := range pods.Items {
+			if pods.Items[i].DeletionTimestamp == nil {
+				pod = &pods.Items[i]
+				break
+			}
+		}
+		if pod == nil || pod.Spec.NodeName == "" {
+			return false, nil
+		}
+		out, _, e := execPod(ctx, cfg, cs, pod.Name, []string{"tailscale", "status", "--json"})
+		if e != nil {
+			return false, nil // pod momentarily gone / not yet up
+		}
+		var st struct {
+			Self struct{ HostName string }
+		}
+		if json.Unmarshal([]byte(out), &st) != nil {
+			return false, nil
+		}
+		last = st.Self.HostName
+		return last == "tailgate-gw-"+name+"-"+pod.Spec.NodeName, nil
+	})
+	if err != nil {
+		t.Fatalf("gateway Self.HostName never became tailgate-gw-%s-<node> (last seen %q): %v", name, last, err)
 	}
-
-	// kind node names are already clean DNS labels, so sanitizeLabel(node) == node here.
-	want := "tailgate-gw-" + name + "-" + node
-	out, serr, err := execPod(ctx, cfg, cs, gw.Name, []string{"tailscale", "status", "--json"})
-	must(t, err, "tailscale status --json: "+serr)
-	var st struct {
-		Self struct{ HostName string }
-	}
-	if err := json.Unmarshal([]byte(out), &st); err != nil {
-		t.Fatalf("parse status json: %v", err)
-	}
-	if st.Self.HostName != want {
-		t.Fatalf("gateway Self.HostName = %q, want %q (node suffix missing)", st.Self.HostName, want)
-	}
-	t.Logf("PASS: gateway registered as %q (traceable to group=%s node=%s)", st.Self.HostName, name, node)
+	t.Logf("PASS: gateway registered as %q (traceable to group=%s + node)", last, name)
 }
