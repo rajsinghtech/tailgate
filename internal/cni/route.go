@@ -8,6 +8,8 @@ package cni
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/containernetworking/cni/pkg/skel"
 	cnitypes "github.com/containernetworking/cni/pkg/types"
@@ -72,8 +74,25 @@ func CmdAdd(args *skel.CmdArgs) (outErr error) {
 		info := netinfo.PodNetInfo{PodIP: ip, Netns: args.Netns, IfName: args.IfName}
 		_ = netinfo.Write(info)
 		// Best-effort: if the pod is a member, create ts0 before the sandbox boots.
-		// Recovered above — never blocks pod creation even on panic.
-		SetupMemberIfMember(args.Args, info)
+		// Run with a hard 5s deadline in a goroutine — if it blocks (e.g. netns
+		// Set hangs in a nested container), we don't hold up pod creation. The
+		// agent will wire it async as a fallback.
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { _ = recover() }()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				SetupMemberIfMember(args.Args, info)
+			}()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+			}
+		}()
+		wg.Wait()
 	}
 	if c.PrevResult == nil {
 		return nil
