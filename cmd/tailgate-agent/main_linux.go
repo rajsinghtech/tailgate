@@ -70,13 +70,18 @@ func main() {
 	// starting the wiring loop. This is what makes ts0 appear at CNI ADD time
 	// (before the sandbox boots), which is required for gVisor. Idempotent; safe
 	// if the dirs are read-only (logs + continues — non-gVisor pods still work
-	// via the async agent path).
-	cniBin := getenv("CNI_BIN_DIR", "/host/opt/cni/bin")
-	cniConf := getenv("CNI_CONF_DIR", "/host/etc/cni/net.d")
-	if err := agent.InstallCNI("/usr/local/bin/tailgate-cni", cniBin, cniConf); err != nil {
-		log.Warn("install cni (non-gVisor pods will use async wiring)", "err", err)
+	// via the async agent path). Set TAILGATE_INSTALL_CNI=false to skip (e.g. in
+	// CI environments without gVisor where the async agent path is sufficient).
+	if getenv("TAILGATE_INSTALL_CNI", "true") == "true" {
+		cniBin := getenv("CNI_BIN_DIR", "/host/opt/cni/bin")
+		cniConf := getenv("CNI_CONF_DIR", "/host/etc/cni/net.d")
+		if err := agent.InstallCNI("/usr/local/bin/tailgate-cni", cniBin, cniConf); err != nil {
+			log.Warn("install cni (non-gVisor pods will use async wiring)", "err", err)
+		} else {
+			log.Info("cni plugin installed", "bin", cniBin, "conf", cniConf)
+		}
 	} else {
-		log.Info("cni plugin installed", "bin", cniBin, "conf", cniConf)
+		log.Info("cni install skipped (TAILGATE_INSTALL_CNI=false)")
 	}
 
 	a := &agent.Agent{
