@@ -65,6 +65,20 @@ func main() {
 		log.Error("NODE_NAME unset")
 		os.Exit(1)
 	}
+
+	// Install the CNI plugin binary + chain it into the node's conflist before
+	// starting the wiring loop. This is what makes ts0 appear at CNI ADD time
+	// (before the sandbox boots), which is required for gVisor. Idempotent; safe
+	// if the dirs are read-only (logs + continues — non-gVisor pods still work
+	// via the async agent path).
+	cniBin := getenv("CNI_BIN_DIR", "/host/opt/cni/bin")
+	cniConf := getenv("CNI_CONF_DIR", "/host/etc/cni/net.d")
+	if err := agent.InstallCNI("/usr/local/bin/tailgate-cni", cniBin, cniConf); err != nil {
+		log.Warn("install cni (non-gVisor pods will use async wiring)", "err", err)
+	} else {
+		log.Info("cni plugin installed", "bin", cniBin, "conf", cniConf)
+	}
+
 	a := &agent.Agent{
 		C:            c,
 		Node:         node,

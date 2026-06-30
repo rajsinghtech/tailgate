@@ -59,6 +59,12 @@ spec:
         # per-node gateway <group>.routes for MirrorRoutes.
         - name: run
           mountPath: /run/tailgate
+        # Node CNI dirs so the agent can install the tailgate-cni binary and
+        # chain it into the conflist (required for gVisor pre-sandbox wiring).
+        - name: cni-bin
+          mountPath: /host/opt/cni/bin
+        - name: cni-conf
+          mountPath: /host/etc/cni/net.d
         {{- with .Values.agent.resources }}
         resources:
           {{- toYaml . | nindent 10 }}
@@ -67,6 +73,14 @@ spec:
       - name: run
         hostPath:
           path: /run/tailgate
+          type: DirectoryOrCreate
+      - name: cni-bin
+        hostPath:
+          path: /opt/cni/bin
+          type: DirectoryOrCreate
+      - name: cni-conf
+        hostPath:
+          path: /etc/cni/net.d
           type: DirectoryOrCreate
       {{- with .Values.agent.nodeSelector }}
       nodeSelector:
