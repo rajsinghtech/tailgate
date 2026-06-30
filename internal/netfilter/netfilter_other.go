@@ -10,7 +10,7 @@ var errUnsupported = errors.New("tailgate netfilter requires linux")
 // Datapath is a non-linux stub.
 type Datapath struct{}
 
-func New() (*Datapath, error)                                 { return nil, errUnsupported }
+func New() (*Datapath, error)                                  { return nil, errUnsupported }
 func (*Datapath) SetupMASQUERADE(string, uint32, string) error { return errUnsupported }
-func SetupPolicyRouting(uint32, int, string) error            { return errUnsupported }
-func EnableForwardingAndRelaxRPFilter() error                 { return errUnsupported }
+func SetupPolicyRouting(uint32, int, string) error             { return errUnsupported }
+func EnableForwardingAndRelaxRPFilter() error                  { return errUnsupported }

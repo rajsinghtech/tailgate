@@ -54,10 +54,11 @@ spec:
         - name: TAILGATE_CLUSTER_CIDRS
           value: {{ .Values.agent.clusterCIDRs | quote }}
         volumeMounts:
-        # Routes the per-node gateways publish for MirrorRoutes (egress-follows-DNS).
+        # The agent writes CNI credentials here (server/token/ca.crt) for the
+        # tailgate-cni plugin to query membership at CNI ADD time, AND reads the
+        # per-node gateway <group>.routes for MirrorRoutes.
         - name: run
           mountPath: /run/tailgate
-          readOnly: true
         {{- with .Values.agent.resources }}
         resources:
           {{- toYaml . | nindent 10 }}
