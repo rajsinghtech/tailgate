@@ -133,10 +133,10 @@ const groupLabel = "tailgate.dev/group"
 
 // Agent is the node-local route-wiring loop.
 type Agent struct {
-	C         client.Client
-	Node      string
-	GatewayNS string
-	Log       *slog.Logger
+	C            client.Client
+	Node         string
+	GatewayNS    string
+	Log          *slog.Logger
 	ClusterCIDRs []string
 	// ServerURL is the kube API server URL (written to /run/tailgate/cni/server
 	// for the CNI plugin to query membership at ADD time).

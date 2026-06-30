@@ -6,8 +6,8 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/rajsinghtech/tailgate/internal/wiring"
 	"github.com/rajsinghtech/tailgate/internal/netinfo"
+	"github.com/rajsinghtech/tailgate/internal/wiring"
 )
 
 var cniLog = slog.New(slog.NewTextHandler(nopWriter{}, &slog.HandlerOptions{Level: slog.LevelWarn}))

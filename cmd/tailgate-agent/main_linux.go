@@ -66,15 +66,15 @@ func main() {
 		os.Exit(1)
 	}
 	a := &agent.Agent{
-		C:          c,
-		Node:       node,
-		GatewayNS:  getenv("TAILGATE_NAMESPACE", "tailgate-system"),
-		Log:        log,
+		C:            c,
+		Node:         node,
+		GatewayNS:    getenv("TAILGATE_NAMESPACE", "tailgate-system"),
+		Log:          log,
 		ClusterCIDRs: clusterCIDRs(),
 		// The agent writes these into /run/tailgate/cni/ on every sync pass so
 		// the CNI plugin can query the kube API at CNI ADD time (pre-sandbox).
-		ServerURL:   ctrl.GetConfigOrDie().Host,
-		SATokenDir:  getenv("TAILGATE_SA_DIR", "/var/run/secrets/kubernetes.io/serviceaccount"),
+		ServerURL:  ctrl.GetConfigOrDie().Host,
+		SATokenDir: getenv("TAILGATE_SA_DIR", "/var/run/secrets/kubernetes.io/serviceaccount"),
 	}
 	log.Info("starting tailgate-agent", "node", node, "gatewayNS", a.GatewayNS, "clusterCIDRs", a.ClusterCIDRs, "serverURL", a.ServerURL)
 	a.Run(ctrl.SetupSignalHandler(), 3*time.Second)
