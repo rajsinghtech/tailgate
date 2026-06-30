@@ -166,7 +166,6 @@ spec:
           volumeMounts:
             - name: run
               mountPath: /run/tailgate
-              readOnly: true
       volumes:
         - name: run
           hostPath:

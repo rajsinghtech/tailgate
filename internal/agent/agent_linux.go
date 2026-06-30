@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/netip"
 	"os"
@@ -16,9 +17,57 @@ import (
 
 	egressv1 "github.com/rajsinghtech/tailgate/api/v1alpha1"
 	"github.com/rajsinghtech/tailgate/internal/netinfo"
+	"github.com/rajsinghtech/tailgate/internal/wiring"
 )
 
 const mirrorDir = "/run/tailgate" // hostPath the gateway publishes <group>.routes into
+
+// cniCredsDir is where the agent writes API credentials for the CNI plugin.
+const cniCredsDir = "/run/tailgate/cni"
+
+// writeCNICreds writes the server URL, SA token, and CA cert into the CNI
+// credentials directory so the CNI plugin can query the kube API at ADD time.
+// The agent has a mounted SA token (for its own informers); we write a copy for
+// the CNI binary (which runs in the pod's container context, not the agent's).
+// Called on every sync pass to handle bound-token rotation.
+func writeCNICreds(serverURL, saTokenDir string) error {
+	if serverURL == "" || saTokenDir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(cniCredsDir, 0o755); err != nil {
+		return err
+	}
+	// Token
+	token, err := os.ReadFile(filepath.Join(saTokenDir, "token"))
+	if err != nil {
+		return fmt.Errorf("read sa token: %w", err)
+	}
+	// CA cert
+	ca, err := os.ReadFile(filepath.Join(saTokenDir, "ca.crt"))
+	if err != nil {
+		return fmt.Errorf("read sa ca.crt: %w", err)
+	}
+	for name, data := range map[string][]byte{
+		"server": []byte(serverURL),
+		"token":  token,
+		"ca.crt": ca,
+	} {
+		tmp, err := os.CreateTemp(cniCredsDir, ".tmp-*")
+		if err != nil {
+			return err
+		}
+		if _, err := tmp.Write(data); err != nil {
+			tmp.Close()
+			return err
+		}
+		tmp.Close()
+		_ = os.Chmod(tmp.Name(), 0o644)
+		if err := os.Rename(tmp.Name(), filepath.Join(cniCredsDir, name)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // mirroredRoutes reads the gateway's published reachable routes for a route-mirroring group
 // (subnet-router + app-connector CIDRs), dropping any that overlap cluster ranges so cluster
@@ -44,7 +93,7 @@ func (a *Agent) mirroredRoutes(group string, g *egressv1.EgressGroup) []string {
 func (a *Agent) overlapsCluster(cidr string) bool {
 	p, err := netip.ParsePrefix(cidr)
 	if err != nil {
-		return true // unparseable -> don't steer it
+		return true
 	}
 	for _, c := range a.ClusterCIDRs {
 		if cp, err := netip.ParsePrefix(strings.TrimSpace(c)); err == nil && cp.Overlaps(p) {
@@ -66,7 +115,6 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
-// subtractStrings returns the elements of a that are not in b.
 func subtractStrings(a, b []string) []string {
 	in := make(map[string]bool, len(b))
 	for _, s := range b {
@@ -86,13 +134,16 @@ const groupLabel = "tailgate.dev/group"
 // Agent is the node-local route-wiring loop.
 type Agent struct {
 	C         client.Client
-	Node      string // this node's name (NODE_NAME)
-	GatewayNS string // namespace where gateway DaemonSets run
+	Node      string
+	GatewayNS string
 	Log       *slog.Logger
-	// ClusterCIDRs are the in-cluster ranges (pod/service/node) kept on the primary CNI
-	// for exit-node members so cluster DNS/API/pod traffic never blackholes through the
-	// full tunnel. Empty unless the group uses an exit node.
 	ClusterCIDRs []string
+	// ServerURL is the kube API server URL (written to /run/tailgate/cni/server
+	// for the CNI plugin to query membership at ADD time).
+	ServerURL string
+	// SATokenDir is the projected service-account token mount path (default
+	// /var/run/secrets/kubernetes.io/serviceaccount).
+	SATokenDir string
 }
 
 type wired struct {
@@ -103,10 +154,14 @@ type wired struct {
 
 // Run polls every interval until ctx is done, wiring member pods and unwiring gone ones.
 func (a *Agent) Run(ctx context.Context, interval time.Duration) {
-	done := map[string]wired{} // podIP -> wiring
+	done := map[string]wired{}
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
+		// Write CNI creds on every pass so the CNI plugin always has a fresh token.
+		if err := writeCNICreds(a.ServerURL, a.SATokenDir); err != nil {
+			a.Log.Warn("write cni creds", "err", err)
+		}
 		if err := a.sync(ctx, done); err != nil {
 			a.Log.Error("sync", "err", err)
 		}
@@ -131,7 +186,7 @@ func (a *Agent) sync(ctx context.Context, done map[string]wired) error {
 		return err
 	}
 	nsCache := map[string]map[string]string{}
-	gwCache := map[string]string{} // group -> current gateway netns (per sync)
+	gwCache := map[string]string{}
 	present := map[string]bool{}
 
 	for i := range pods.Items {
@@ -142,7 +197,7 @@ func (a *Agent) sync(ctx context.Context, done map[string]wired) error {
 		if p.Status.PodIP == "" || p.Status.Phase != corev1.PodRunning {
 			continue
 		}
-		grp := matchGroup(p, a.nsLabels(ctx, p.Namespace, nsCache), groups.Items)
+		grp := wiring.MatchGroup(p, a.nsLabels(ctx, p.Namespace, nsCache), groups.Items)
 		if grp == "" {
 			continue
 		}
@@ -154,9 +209,7 @@ func (a *Agent) sync(ctx context.Context, done map[string]wired) error {
 			continue
 		}
 		g := findGroup(groups.Items, grp)
-		mir := a.mirroredRoutes(grp, g) // nil unless route-mirroring is enabled
-		// Already wired to the CURRENT gateway with the SAME mirrored routes? nothing to do.
-		// (A gateway restart changes the netns; a netmap change changes mir -> re-wire.)
+		mir := a.mirroredRoutes(grp, g)
 		if w, ok := done[ip]; ok && w.gwNs == gwNs && equalStrings(w.mirrored, mir) {
 			continue
 		}
@@ -172,7 +225,7 @@ func (a *Agent) sync(ctx context.Context, done map[string]wired) error {
 		}
 		var stale []string
 		if w, ok := done[ip]; ok {
-			stale = subtractStrings(w.mirrored, mir) // mirrored routes withdrawn since last wire
+			stale = subtractStrings(w.mirrored, mir)
 		}
 		if err := Wire(info, gwNs, append(routeSet(), mir...), stale, exit); err != nil {
 			a.Log.Error("wire", "pod", p.Name, "err", err)
@@ -194,7 +247,6 @@ func (a *Agent) sync(ctx context.Context, done map[string]wired) error {
 	return nil
 }
 
-// gwNsCached memoizes gatewayNetns per group for one sync pass.
 func (a *Agent) gwNsCached(ctx context.Context, group string, cache map[string]string) (string, error) {
 	if ns, ok := cache[group]; ok {
 		if ns == "" {
@@ -211,7 +263,6 @@ func (a *Agent) gwNsCached(ctx context.Context, group string, cache map[string]s
 	return ns, nil
 }
 
-// gatewayNetns finds the node-local gateway pod for group and returns its netns.
 func (a *Agent) gatewayNetns(ctx context.Context, group string) (string, error) {
 	var pods corev1.PodList
 	if err := a.C.List(ctx, &pods, client.InNamespace(a.GatewayNS), client.MatchingLabels{groupLabel: group}); err != nil {

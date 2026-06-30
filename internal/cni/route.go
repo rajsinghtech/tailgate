@@ -45,7 +45,11 @@ func parse(stdin []byte) (*netConf, []byte, error) {
 	return &c, pr, err
 }
 
-// CmdAdd records the pod netns keyed by its IPv4, then re-emits prevResult.
+// CmdAdd records the pod netns keyed by its IPv4. If the pod is an EgressGroup
+// member, it also creates ts0 inside the pod netns NOW — before the sandbox
+// boots — so gVisor's netstack (which scrapes the netns only at sandbox start)
+// picks up the interface. Otherwise the agent wires async after the pod is
+// Running (works for non-gVisor runtimes). Then re-emits prevResult.
 func CmdAdd(args *skel.CmdArgs) error {
 	c, prev, err := parse(args.StdinData)
 	if err != nil {
@@ -55,12 +59,17 @@ func CmdAdd(args *skel.CmdArgs) error {
 		return fmt.Errorf("tailgate-cni must be chained (no prevResult)")
 	}
 	if ip, err := extractIPv4(string(prev)); err == nil {
-		_ = netinfo.Write(netinfo.PodNetInfo{PodIP: ip, Netns: args.Netns, IfName: args.IfName})
+		info := netinfo.PodNetInfo{PodIP: ip, Netns: args.Netns, IfName: args.IfName}
+		_ = netinfo.Write(info)
+		// Best-effort: if the pod is a member, create ts0 before the sandbox boots.
+		// Never errors out — CNI ADD must not fail because of our wiring.
+		SetupMemberIfMember(args.Args, info)
 	}
 	return cnitypes.PrintResult(c.PrevResult, c.CNIVersion)
 }
 
-// CmdDel removes the pod's net-info record.
+// CmdDel removes the pod's net-info record and cleans up any host-side veth
+// peer left behind (if the agent hadn't moved it into the gateway yet).
 func CmdDel(args *skel.CmdArgs) error {
 	_, prev, err := parse(args.StdinData)
 	if err != nil || prev == nil {
@@ -68,6 +77,7 @@ func CmdDel(args *skel.CmdArgs) error {
 	}
 	if ip, err := extractIPv4(string(prev)); err == nil {
 		_ = netinfo.Remove(ip)
+		deleteHostPeer(ip)
 	}
 	return nil
 }
