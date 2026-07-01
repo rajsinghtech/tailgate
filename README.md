@@ -173,6 +173,10 @@ spec:
     }
 ```
 
+> **The NAD is not created by tailgate.** The consumer (or a cluster admin) must create it in each
+> namespace that runs tailscale-egress pods. For example, bhaiya (v0.10.36+) creates it automatically
+> on the first tailscale-egress workspace provision.
+
 Then annotate only the gVisor pods that need pre-wiring and label them so an `EgressGroup` selects them:
 
 ```yaml

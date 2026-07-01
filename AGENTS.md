@@ -9,6 +9,12 @@
 - In Multus/NAD mode, `tailgate-cni` may be invoked without `prevResult`. It uses `K8S_POD_UID` as the stable key, creates `ts0` pre-sandbox, and writes `/run/tailgate/prewire/<podUID>` so the agent can adopt the host-side peer after the pod is Running.
 - If a cluster gets stuck with `plugin type="tailgate-cni" failed (add): failed to unmarshal raw result: unexpected end of JSON input`, remove `tailgate-cni` from the node CNI conflists and remove `/opt/cni/bin/tailgate-cni`; then roll an agent with `TAILGATE_INSTALL_CNI=disabled` or `binary`.
 
+## NAD ownership
+
+- tailgate does **not** create the `NetworkAttachmentDefinition`. The consumer (e.g. bhaiya, or a cluster admin) must create it in each namespace that runs tailscale-egress pods.
+- The NAD config must be `{"cniVersion":"0.3.1","name":"tailgate","type":"tailgate-cni"}` and the NAD name must match the pod's `k8s.v1.cni.cncf.io/networks` annotation value.
+- bhaiya (v0.10.36+) creates the NAD automatically in its namespace on the first tailscale-egress workspace provision (idempotent — `AlreadyExists` is a no-op). The bhaiya Role must grant `create/get/list/watch` on `k8s.cni.cncf.io/network-attachment-definitions`.
+
 ## Release/deployment notes
 
 - Chart values use `agent.cniMode`, not a boolean. Valid values: `disabled`, `binary`, `chained`.
