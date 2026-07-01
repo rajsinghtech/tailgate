@@ -22,6 +22,17 @@ type netConf struct {
 	cnitypes.NetConf
 }
 
+func printEmptyResult(stdin []byte) error {
+	var v struct {
+		CNIVersion string `json:"cniVersion"`
+	}
+	_ = json.Unmarshal(stdin, &v)
+	if v.CNIVersion == "" {
+		v.CNIVersion = "0.3.1"
+	}
+	return cnitypes.PrintResult(&current.Result{CNIVersion: v.CNIVersion}, v.CNIVersion)
+}
+
 func extractIPv4(prevResultJSON string) (string, error) {
 	var r current.Result
 	if err := json.Unmarshal([]byte(prevResultJSON), &r); err != nil {
@@ -63,12 +74,15 @@ func CmdAdd(args *skel.CmdArgs) (outErr error) {
 	}()
 	c, prev, err := parse(args.StdinData)
 	if err != nil {
-		// Can't parse — but we must not block pod creation. Return nil so the
-		// container can start; the agent will wire it async if needed.
-		return nil
+		// Can't parse — but we must not block pod creation or emit empty stdout
+		// (Multus treats empty stdout as a CNI failure). Return a valid empty result.
+		return printEmptyResult(args.StdinData)
 	}
 	if prev == nil {
-		return nil // not chained correctly — don't block pod creation
+		// Some runtimes/delegates (notably Multus wrapping a conflist) may invoke
+		// tailgate-cni without prevResult. We can't derive the pod IP, so skip
+		// pre-wiring, but still emit a valid result so CNI ADD succeeds.
+		return printEmptyResult(args.StdinData)
 	}
 	if ip, err := extractIPv4(string(prev)); err == nil {
 		info := netinfo.PodNetInfo{PodIP: ip, Netns: args.Netns, IfName: args.IfName}
@@ -95,7 +109,7 @@ func CmdAdd(args *skel.CmdArgs) (outErr error) {
 		wg.Wait()
 	}
 	if c.PrevResult == nil {
-		return nil
+		return printEmptyResult(args.StdinData)
 	}
 	return cnitypes.PrintResult(c.PrevResult, c.CNIVersion)
 }
