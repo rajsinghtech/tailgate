@@ -84,12 +84,14 @@ func CmdAdd(args *skel.CmdArgs) (outErr error) {
 	if err != nil {
 		// Can't parse — but we must not block pod creation or emit empty stdout
 		// (Multus treats empty stdout as a CNI failure). Return a valid empty result.
+		SetupMemberFromArgs(args.Args, args.Netns)
 		return printEmptyResult(args.StdinData)
 	}
 	if prev == nil {
 		// Some runtimes/delegates (notably Multus wrapping a conflist) may invoke
-		// tailgate-cni without prevResult. We can't derive the pod IP, so skip
-		// pre-wiring, but still emit a valid result so CNI ADD succeeds.
+		// tailgate-cni without prevResult. Use the pod UID as the prewire key and
+		// still emit a valid result so CNI ADD succeeds.
+		SetupMemberFromArgs(args.Args, args.Netns)
 		return printEmptyResult(args.StdinData)
 	}
 	if ip, err := extractIPv4(string(prev)); err == nil {
@@ -138,6 +140,12 @@ func CmdDel(args *skel.CmdArgs) (outErr error) {
 	if ip, err := extractIPv4(string(prev)); err == nil {
 		_ = netinfo.Remove(ip)
 		deleteHostPeer(ip)
+	}
+	if uid := ParseCNIArgs(args.Args)["K8S_POD_UID"]; uid != "" {
+		if pw, err := netinfo.ReadPrewire(uid); err == nil {
+			deleteHostLink(pw.GwName)
+		}
+		_ = netinfo.RemovePrewire(uid)
 	}
 	return nil
 }

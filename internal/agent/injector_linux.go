@@ -71,6 +71,9 @@ func Wire(info netinfo.PodNetInfo, gwNsPath string, routes, stale []string, exit
 		return err
 	}
 	_, gwName := wiring.HostVethNames(info.PodIP)
+	if info.GwName != "" {
+		gwName = info.GwName
+	}
 	state := wiring.CheckWireState(info.Netns, gwNsPath, gwName)
 
 	switch state {
@@ -204,5 +207,9 @@ func Unwire(info netinfo.PodNetInfo, gwNsPath string) error {
 	})
 	// Also clean up any host-side peer (CNI left it before the agent moved it).
 	wiring.DeleteHostPeer(info.PodIP)
+	wiring.DeleteHostLink(info.GwName)
+	if info.PodUID != "" {
+		_ = netinfo.RemovePrewire(info.PodUID)
+	}
 	return err
 }

@@ -16,10 +16,18 @@ const cniPluginType = "tailgate-cni"
 // {"type":"tailgate-cni"} entry to the lexically-first .conflist in confDir.
 // Idempotent. Returns nil (logs) on read-only dirs so the agent doesn't crash-loop.
 func InstallCNI(srcBin, binDir, confDir string) error {
-	if err := copyFile(srcBin, filepath.Join(binDir, cniPluginType), 0o755); err != nil {
+	if err := InstallCNIBinary(srcBin, binDir); err != nil {
 		return fmt.Errorf("install cni binary: %w", err)
 	}
 	return patchConflist(confDir)
+}
+
+// InstallCNIBinary copies the plugin binary into binDir without mutating any
+// conflist. This is the safe mode for Multus clusters where tailgate-cni is
+// invoked via a NetworkAttachmentDefinition instead of chained into the primary
+// CNI delegate (e.g. Cilium).
+func InstallCNIBinary(srcBin, binDir string) error {
+	return copyFile(srcBin, filepath.Join(binDir, cniPluginType), 0o755)
 }
 
 func patchConflist(confDir string) error {

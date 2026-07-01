@@ -54,10 +54,10 @@ agent:
   # capture pod/service traffic. Carve BOTH the pod and service CIDRs (e.g.
   # "10.244.0.0/16,10.96.0.0/12"). Comma-separated.
   clusterCIDRs: "10.96.0.0/12"
-  # -- Install tailgate-cni into the node's primary CNI chain. Disabled by default because
-  # clusters that use Multus as the top-level CNI must use a Multus-compatible integration
-  # instead of mutating the Cilium delegate conflist.
-  installCNI: false
+  # -- tailgate-cni install mode. "disabled" = do not install; "binary" = copy
+  # tailgate-cni to /opt/cni/bin for Multus NetworkAttachmentDefinitions; "chained" =
+  # mutate the primary CNI conflist (do NOT use with Multus+Cilium delegate conflists).
+  cniMode: disabled
   # Resource requests and limits for the agent
   resources:
     limits:

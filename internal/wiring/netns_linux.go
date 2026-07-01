@@ -199,7 +199,15 @@ func SetupMember(podIP, podNetns string, routes []string) error {
 // before the agent moved the peer into the gateway netns.
 func DeleteHostPeer(podIP string) {
 	_, gwName := HostVethNames(podIP)
-	if l, err := netlink.LinkByName(gwName); err == nil {
+	DeleteHostLink(gwName)
+}
+
+// DeleteHostLink removes a host-netns link by name if present.
+func DeleteHostLink(name string) {
+	if name == "" {
+		return
+	}
+	if l, err := netlink.LinkByName(name); err == nil {
 		_ = netlink.LinkDel(l)
 	}
 }

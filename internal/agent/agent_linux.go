@@ -218,7 +218,10 @@ func (a *Agent) sync(ctx context.Context, done map[string]wired) error {
 			a.Log.Warn("member netns not found yet", "pod", p.Name, "err", err)
 			continue
 		}
-		info := netinfo.PodNetInfo{PodIP: ip, Netns: memberNs, IfName: "eth0"}
+		info := netinfo.PodNetInfo{PodIP: ip, PodUID: string(p.UID), Netns: memberNs, IfName: "eth0"}
+		if pw, err := netinfo.ReadPrewire(string(p.UID)); err == nil {
+			info.GwName = pw.GwName
+		}
 		var exit *ExitOpts
 		if g != nil && g.Spec.ExitNode != nil {
 			exit = &ExitOpts{ClusterCIDRs: a.ClusterCIDRs}
