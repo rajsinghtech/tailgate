@@ -163,6 +163,8 @@ spec:
             # node, giving an observable source-IP traversal proof.
             - name: TAILGATE_CLUSTER_CIDRS
               value: "10.96.0.0/12"
+            - name: TAILGATE_INSTALL_CNI
+              value: "false"
           volumeMounts:
             - name: run
               mountPath: /run/tailgate
