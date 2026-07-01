@@ -65,9 +65,13 @@ jobs:
         run: |
           kubectl apply -f config/crd/tailscale.rajsingh.info_egressgroups.yaml
           # Pin the just-built `ci` tag into a temp copy of the manifest.
+          # Set TAILGATE_INSTALL_CNI=false — e2e kind nodes don't use gVisor, so the
+          # CNI pre-wiring is unnecessary and chaining into kindnetd's conflist can
+          # interfere with pod creation. The async agent path handles all wiring.
           tmp="$(mktemp)"
           sed -E 's#tailgate-(operator|agent|gateway):[A-Za-z0-9._-]+#tailgate-\1:ci#g' \
-            deploy/manifests/tailgate.yaml > "$tmp"
+            deploy/manifests/tailgate.yaml | \
+            sed 's#value: "10.96.0.0/12"#value: "10.96.0.0/12"\n            - name: TAILGATE_INSTALL_CNI\n              value: "false"#' > "$tmp"
           kubectl apply -f "$tmp"
           # Placeholder creds so the operator pod can boot; each test overwrites the
           # secret with its own ephemeral-tailnet creds and restarts the operator.

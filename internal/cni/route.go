@@ -8,6 +8,8 @@ package cni
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/containernetworking/cni/pkg/skel"
 	cnitypes "github.com/containernetworking/cni/pkg/types"
@@ -50,27 +52,63 @@ func parse(stdin []byte) (*netConf, []byte, error) {
 // boots — so gVisor's netstack (which scrapes the netns only at sandbox start)
 // picks up the interface. Otherwise the agent wires async after the pod is
 // Running (works for non-gVisor runtimes). Then re-emits prevResult.
-func CmdAdd(args *skel.CmdArgs) error {
+//
+// This function MUST NOT fail — a CNI plugin crash leaves the pod stuck in
+// ContainerCreating indefinitely. All best-effort work is recovered.
+func CmdAdd(args *skel.CmdArgs) (outErr error) {
+	defer func() {
+		if r := recover(); r != nil {
+			outErr = nil // swallow panics — CNI ADD must never fail
+		}
+	}()
 	c, prev, err := parse(args.StdinData)
 	if err != nil {
-		return err
+		// Can't parse — but we must not block pod creation. Return nil so the
+		// container can start; the agent will wire it async if needed.
+		return nil
 	}
 	if prev == nil {
-		return fmt.Errorf("tailgate-cni must be chained (no prevResult)")
+		return nil // not chained correctly — don't block pod creation
 	}
 	if ip, err := extractIPv4(string(prev)); err == nil {
 		info := netinfo.PodNetInfo{PodIP: ip, Netns: args.Netns, IfName: args.IfName}
 		_ = netinfo.Write(info)
 		// Best-effort: if the pod is a member, create ts0 before the sandbox boots.
-		// Never errors out — CNI ADD must not fail because of our wiring.
-		SetupMemberIfMember(args.Args, info)
+		// Run with a hard 5s deadline in a goroutine — if it blocks (e.g. netns
+		// Set hangs in a nested container), we don't hold up pod creation. The
+		// agent will wire it async as a fallback.
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { _ = recover() }()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				SetupMemberIfMember(args.Args, info)
+			}()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+			}
+		}()
+		wg.Wait()
+	}
+	if c.PrevResult == nil {
+		return nil
 	}
 	return cnitypes.PrintResult(c.PrevResult, c.CNIVersion)
 }
 
 // CmdDel removes the pod's net-info record and cleans up any host-side veth
 // peer left behind (if the agent hadn't moved it into the gateway yet).
-func CmdDel(args *skel.CmdArgs) error {
+// Must not fail — a CNI DEL failure can leave stale state.
+func CmdDel(args *skel.CmdArgs) (outErr error) {
+	defer func() {
+		if r := recover(); r != nil {
+			outErr = nil
+		}
+	}()
 	_, prev, err := parse(args.StdinData)
 	if err != nil || prev == nil {
 		return nil

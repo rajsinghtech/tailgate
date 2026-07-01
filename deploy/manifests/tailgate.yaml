@@ -166,8 +166,20 @@ spec:
           volumeMounts:
             - name: run
               mountPath: /run/tailgate
+            - name: cni-bin
+              mountPath: /host/opt/cni/bin
+            - name: cni-conf
+              mountPath: /host/etc/cni/net.d
       volumes:
         - name: run
           hostPath:
             path: /run/tailgate
+            type: DirectoryOrCreate
+        - name: cni-bin
+          hostPath:
+            path: /opt/cni/bin
+            type: DirectoryOrCreate
+        - name: cni-conf
+          hostPath:
+            path: /etc/cni/net.d
             type: DirectoryOrCreate

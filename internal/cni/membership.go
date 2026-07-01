@@ -32,10 +32,9 @@ func ParseCNIArgs(raw string) CNIArgs {
 // CheckMembership queries the kube API for the pod's labels + namespace labels
 // and matches them against all EgressGroups. Returns the group name or "".
 //
-// This is called from CNI ADD to determine whether to create ts0 in the pod
-// netns BEFORE the sandbox boots (required for gVisor). If the API is unreachable
-// or the agent hasn't written credentials yet, this returns "" — the pod starts
-// without ts0 and the agent will wire it async (works for non-gVisor pods).
+// Called from CNI ADD. The total budget is 500ms — if the API doesn't respond
+// in time (e.g., control plane is busy), it returns "" and the agent wires the
+// pod async. This keeps the CNI ADD path from blocking pod creation.
 func CheckMembership(ctx context.Context, kc *KubeClient, args CNIArgs) (string, error) {
 	podName := args["K8S_POD_NAME"]
 	podNs := args["K8S_POD_NAMESPACE"]
@@ -43,9 +42,17 @@ func CheckMembership(ctx context.Context, kc *KubeClient, args CNIArgs) (string,
 		return "", fmt.Errorf("CNI args missing K8S_POD_NAME/K8S_POD_NAMESPACE")
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
 
+	// Fast path: if there are no EgressGroups at all, this pod can't be a member.
+	groups, err := kc.ListEgressGroups(ctx)
+	if err != nil {
+		return "", fmt.Errorf("list egressgroups: %w", err)
+	}
+	if len(groups) == 0 {
+		return "", nil
+	}
 	pod, err := kc.GetPod(ctx, podName, podNs)
 	if err != nil {
 		return "", fmt.Errorf("get pod: %w", err)
@@ -53,10 +60,6 @@ func CheckMembership(ctx context.Context, kc *KubeClient, args CNIArgs) (string,
 	ns, err := kc.GetNamespace(ctx, podNs)
 	if err != nil {
 		return "", fmt.Errorf("get namespace: %w", err)
-	}
-	groups, err := kc.ListEgressGroups(ctx)
-	if err != nil {
-		return "", fmt.Errorf("list egressgroups: %w", err)
 	}
 	return wiring.MatchGroup(pod, ns.Labels, groups), nil
 }
