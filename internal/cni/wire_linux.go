@@ -21,7 +21,8 @@ func cniDebug(msg string, args ...any) {
 		return
 	}
 	defer f.Close()
-	attrs := []any{"ts", time.Now().UTC().Format(time.RFC3339Nano)}
+	attrs := make([]any, 0, 2+len(args))
+	attrs = append(attrs, "ts", time.Now().UTC().Format(time.RFC3339Nano))
 	attrs = append(attrs, args...)
 	slog.New(slog.NewTextHandler(f, nil)).Info(msg, attrs...)
 }
