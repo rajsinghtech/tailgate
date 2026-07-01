@@ -54,7 +54,7 @@ API group: `tailscale.rajsingh.info/v1alpha1`.
                                ▼
    ┌──────── node ─────────────────────────────────────────────┐
    │  tailgate-agent (DaemonSet, hostPID/hostNetwork)           │
-   │   • installs the route-only CNI (chained into the conflist)│
+   │   • installs tailgate-cni as binary/NAD or chained CNI     │
    │   • watches Pods + EgressGroups; for each MEMBER pod:      │
    │       veth-stitches it into the node's gateway netns +     │
    │       injects 100.64/10, the ULA + mirrored routes         │
@@ -74,7 +74,7 @@ Three components make up the system (images published to `ghcr.io/rajsinghtech/`
 
 - **`tailgate-operator`** (Deployment) — a controller-runtime reconciler. For each `EgressGroup` it mints an OAuth authkey tagged with the group's `spec.tags` (default `tag:k8s`) into a Secret, renders a declarative `tailscaled` config (`ipn.ConfigVAlpha`) from the spec into a ConfigMap, and creates the per-group gateway DaemonSet. Everything it creates is owner-referenced for garbage collection, and a finalizer deletes the gateway's tailnet device on teardown.
 - **`tailgate-gateway`** (per-group DaemonSet, privileged) — the group's shared tailnet node, **one per node** (a DaemonSet, so a member always has a same-node gateway to veth into; the group therefore has as many tailnet devices as nodes it runs on). It runs the official `tailscale/tailscale` image's `tailscaled` in kernel-TUN mode inside its **own** pod network namespace, so each group's `tailscale0` is isolated and the agent can stitch member veths into it. It enables IP forwarding, MASQUERADEs forwarded member traffic onto `tailscale0` (source identity = the group's tag), and `fwmark`s member traffic into a policy table that routes through `tailscale0` — so `tailscaled` sends each destination where its netmap says (a CGNAT peer, an accepted subnet/app-connector CIDR, or the exit node for `0.0.0.0/0`). It watches its config file and calls LocalAPI `ReloadConfig` on change, with no restart, and persists state so the node identity is stable across restarts.
-- **`tailgate-agent`** (DaemonSet, privileged + `hostPID` + `hostNetwork`) — installs the chained route-only CNI plugin (`tailgate-cni`) into the node's CNI conflist, then watches Pods and `EgressGroup`s. For each pod a group selects, it veth-stitches the pod into that node's group-gateway namespace and installs the tailnet routes (`100.64.0.0/10`, the ULA, and the routes the gateway accepts, mirrored from its netmap) toward the gateway. Membership is a label selector evaluated by an informer — there is no per-pod annotation or NetworkAttachmentDefinition to manage.
+- **`tailgate-agent`** (DaemonSet, privileged + `hostPID` + `hostNetwork`) — installs the `tailgate-cni` binary when requested, then watches Pods and `EgressGroup`s. For each pod a group selects, it veth-stitches the pod into that node's group-gateway namespace and installs the tailnet routes (`100.64.0.0/10`, the ULA, and the routes the gateway accepts, mirrored from its netmap) toward the gateway. Membership is a label selector evaluated by the agent.
 
 A shared per-group gateway keeps the tailnet device count proportional to the number of groups rather than the number of pods, and preserves the group's tag as the source identity for all member traffic.
 
@@ -138,6 +138,54 @@ networking intact two ways: a member on an exit node still reaches kube-DNS and 
 instead of blackholing through the full tunnel, and any accepted/mirrored tailnet route that overlaps
 a cluster range is dropped before it could capture pod/service traffic. Set it to your real pod
 **and** service CIDRs, e.g. `10.244.0.0/16,10.96.0.0/12`.
+
+### CNI install modes, Multus/Cilium, and gVisor
+
+`tailgate` has two different wiring paths:
+
+- **Async agent wiring** (default): the agent creates/moves `ts0` after the pod is Running. This works for normal Linux/runc pods and is safest for general clusters.
+- **CNI pre-wiring**: `tailgate-cni` creates `ts0` during CNI ADD, before the sandbox boots. This is required for gVisor/runsc because gVisor's userspace netstack scrapes interfaces, addresses, and routes only at sandbox start and does not hot-plug interfaces added later.
+
+Helm controls CNI behavior with `agent.cniMode`:
+
+| Mode | Meaning | Use when |
+|------|---------|----------|
+| `disabled` | Do not install `tailgate-cni`; async agent wiring only. | Default/safest for normal pods. |
+| `binary` | Copy `tailgate-cni` to `/opt/cni/bin`, but do not mutate any conflist. | Multus clusters; invoke `tailgate-cni` through a `NetworkAttachmentDefinition` for only the pods that need pre-wiring. |
+| `chained` | Copy the binary and append `tailgate-cni` to the primary CNI conflist. | Only on clusters where the primary CNI directly supports this chaining model. Do **not** use on Multus+Cilium delegate conflists. |
+
+On clusters where **Multus is the top-level CNI and Cilium is the primary delegate**, do **not** chain `tailgate-cni` into Cilium's delegate conflist. Multus expects the delegate result to carry the primary network info; inserting a non-primary plugin into the delegate conflist can break sandbox creation for unrelated pods. Use `agent.cniMode: binary` and a Multus NAD instead.
+
+Example NAD for gVisor pods:
+
+```yaml
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: tailgate
+  namespace: default
+spec:
+  config: |
+    {
+      "cniVersion": "0.3.1",
+      "name": "tailgate",
+      "type": "tailgate-cni"
+    }
+```
+
+Then annotate only the gVisor pods that need pre-wiring and label them so an `EgressGroup` selects them:
+
+```yaml
+metadata:
+  annotations:
+    k8s.v1.cni.cncf.io/networks: tailgate
+  labels:
+    tailgate.rajsingh.info/egress: robbinsdale
+spec:
+  runtimeClassName: gvisor
+```
+
+With this path, `tailgate-cni` runs as a secondary Multus attachment, creates `ts0` before gVisor starts, and writes a prewire record keyed by pod UID. The agent later adopts that pre-created peer and moves it into the node-local gateway netns. The pod keeps Cilium's primary `eth0` untouched.
 
 ## Usage
 
