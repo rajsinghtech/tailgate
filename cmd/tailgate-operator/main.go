@@ -58,6 +58,13 @@ func main() {
 		os.Getenv("TS_OAUTH_CLIENT_ID"),
 		os.Getenv("TS_OAUTH_CLIENT_SECRET"),
 	)
+	// dnsTailnet is the tailnet name the DNS webhook prepends to member pods'
+	// search list so bare MagicDNS names resolve. Sanitize the default "-"
+	// placeholder so it never leaks into a resolv.conf search domain.
+	dnsTailnet := tailnet
+	if dnsTailnet == "" || dnsTailnet == "-" {
+		dnsTailnet = ""
+	}
 	r := &controller.EgressGroupReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
@@ -86,7 +93,7 @@ func main() {
 		os.Exit(1)
 	}
 	mgr.GetWebhookServer().Register("/mutate-v1-pod", &admission.Webhook{
-		Handler: &tgwebhook.DNSMutator{Client: mgr.GetClient(), Decoder: admission.NewDecoder(scheme), Tailnet: tailnet},
+		Handler: &tgwebhook.DNSMutator{Client: mgr.GetClient(), Decoder: admission.NewDecoder(scheme), Tailnet: dnsTailnet},
 	})
 
 	log.Info("starting tailgate-operator")
