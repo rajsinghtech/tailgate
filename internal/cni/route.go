@@ -8,6 +8,7 @@ package cni
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -30,7 +31,11 @@ func printEmptyResult(stdin []byte) error {
 	if v.CNIVersion == "" {
 		v.CNIVersion = "0.3.1"
 	}
-	return cnitypes.PrintResult(&current.Result{CNIVersion: v.CNIVersion}, v.CNIVersion)
+	// Write raw JSON directly. In degraded/no-prevResult paths we specifically
+	// need non-empty stdout; relying on PrintResult for an otherwise-empty result
+	// has proven fragile under Multus, which treats empty stdout as a CNI failure.
+	_, err := fmt.Fprintf(os.Stdout, `{"cniVersion":%q,"interfaces":[],"ips":[],"routes":[]}`+"\n", v.CNIVersion)
+	return err
 }
 
 func extractIPv4(prevResultJSON string) (string, error) {
@@ -69,7 +74,10 @@ func parse(stdin []byte) (*netConf, []byte, error) {
 func CmdAdd(args *skel.CmdArgs) (outErr error) {
 	defer func() {
 		if r := recover(); r != nil {
-			outErr = nil // swallow panics — CNI ADD must never fail
+			// Swallow panics but still emit a valid CNI result; empty stdout breaks
+			// Multus with "unexpected end of JSON input" and strands pods in
+			// ContainerCreating.
+			outErr = printEmptyResult(args.StdinData)
 		}
 	}()
 	c, prev, err := parse(args.StdinData)
