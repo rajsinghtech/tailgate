@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -20,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	egressv1 "github.com/rajsinghtech/tailgate/api/v1alpha1"
+	"github.com/rajsinghtech/tailgate/internal/tsclient"
 )
 
 // quad100 is the MagicDNS service IP every tailscaled serves; it sits inside 100.64.0.0/10,
@@ -30,13 +32,19 @@ const quad100 = "100.100.100.100"
 type DNSMutator struct {
 	Client  client.Client
 	Decoder admission.Decoder
-	// Tailnet is the tailnet DNS name (e.g. "corp.ts.net") from TS_TAILNET. When
-	// non-empty, it is prepended to the search list so bare MagicDNS node names
-	// (e.g. "ottawa-k8s-operator") resolve without typing the full FQDN.
+	// TS is the Tailscale API client used to resolve the tailnet DNS suffix when
+	// Tailnet is empty or "-". May be nil in tests (the webhook degrades to
+	// cluster-only search domains).
+	TS tsclient.Client
+	// Tailnet is an explicit override for the tailnet DNS suffix (from TS_TAILNET).
+	// When set to a real value (not "-" or ""), it is used directly and no API
+	// call is made. When "-" or empty, the webhook lazily resolves it from the
+	// Tailscale API on first use and caches the result.
 	Tailnet string
 
 	mu         sync.Mutex
-	clusterDNS string // memoized kube-dns ClusterIP
+	clusterDNS string       // memoized kube-dns ClusterIP
+	tailnet    atomic.Value // string, lazily resolved from the API
 }
 
 // Handle implements admission.Handler.
@@ -59,7 +67,8 @@ func (m *DNSMutator) Handle(ctx context.Context, req admission.Request) admissio
 	if clusterDNS == "" {
 		clusterDNS = m.detectClusterDNS(ctx)
 	}
-	applyMemberDNS(pod, dns, req.Namespace, clusterDNS, m.Tailnet)
+	tailnet := m.resolveTailnet(ctx)
+	applyMemberDNS(pod, dns, req.Namespace, clusterDNS, tailnet)
 
 	out, err := json.Marshal(pod)
 	if err != nil {
@@ -145,6 +154,35 @@ func (m *DNSMutator) detectClusterDNS(ctx context.Context) string {
 		logf.FromContext(ctx).Info("could not auto-detect kube-dns ClusterIP; cluster.local resolution may degrade — set spec.dns.clusterDNS")
 	}
 	return m.clusterDNS
+}
+
+// resolveTailnet returns the tailnet DNS suffix. If the explicit Tailnet field
+// is a real value (not "-" or ""), it is used directly. Otherwise the suffix
+// is lazily resolved from the Tailscale API (device FQDN extraction) on first
+// use and cached for the lifetime of the process. Returns "" when the API
+// client is nil or no devices exist yet — the webhook degrades to cluster-only
+// search domains in that case.
+func (m *DNSMutator) resolveTailnet(ctx context.Context) string {
+	if m.Tailnet != "" && m.Tailnet != "-" {
+		return m.Tailnet
+	}
+	if cached, ok := m.tailnet.Load().(string); ok && cached != "" {
+		return cached
+	}
+	if m.TS == nil {
+		logf.FromContext(ctx).Info("resolveTailnet: TS client is nil, skipping tailnet suffix resolution")
+		return ""
+	}
+	name, err := m.TS.TailnetName(ctx)
+	if err != nil {
+		logf.FromContext(ctx).Error(err, "resolve tailnet name from API; DNS search list will omit tailnet suffix")
+		return ""
+	}
+	logf.FromContext(ctx).Info("resolveTailnet: resolved tailnet suffix from API", "tailnet", name)
+	if name != "" {
+		m.tailnet.Store(name)
+	}
+	return name
 }
 
 // selectorMatches mirrors the agent's matchGroup for a single group's selector: a nil

@@ -26,6 +26,9 @@ func (m *mockTS) DeleteDeviceByHostname(context.Context, string) error { return 
 func (m *mockTS) ResolveExitNode(context.Context) (string, error) {
 	return "100.64.0.42", nil
 }
+func (m *mockTS) TailnetName(context.Context) (string, error) {
+	return "test.ts.net", nil
+}
 
 func newScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()

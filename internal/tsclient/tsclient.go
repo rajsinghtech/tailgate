@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
+	"strings"
 	"time"
 
 	tsapi "tailscale.com/client/tailscale/v2"
@@ -26,6 +27,11 @@ type Client interface {
 	// ResolveExitNode returns the tailnet IP of an eligible exit node — one advertising the
 	// default route (0.0.0.0/0), preferring a control-connected node. Resolves "auto".
 	ResolveExitNode(ctx context.Context) (string, error)
+	// TailnetName returns the tailnet's DNS suffix (e.g. "corp.ts.net") by listing
+	// devices and extracting it from the first device's MagicDNS FQDN. Used by the
+	// DNS webhook to prepend the tailnet to member pods' search list so bare
+	// MagicDNS node names resolve. Returns "" if no devices exist yet.
+	TailnetName(ctx context.Context) (string, error)
 }
 
 type api struct{ ts *tsapi.Client }
@@ -124,4 +130,23 @@ func tailnetV4(addrs []string) string {
 		}
 	}
 	return ""
+}
+
+// TailnetName resolves the tailnet DNS suffix (e.g. "corp.ts.net") by listing
+// devices and extracting it from the first device's MagicDNS FQDN. A device's
+// Name field is "<hostname>.<tailnet-suffix>" (e.g. "node1.corp.ts.net"), so
+// the tailnet suffix is everything after the first dot. Returns "" if the
+// tailnet has no devices yet.
+func (a *api) TailnetName(ctx context.Context) (string, error) {
+	devices, err := a.ts.Devices().List(ctx)
+	if err != nil {
+		return "", fmt.Errorf("list devices for tailnet name: %w", err)
+	}
+	for _, d := range devices {
+		name := strings.TrimSuffix(d.Name, ".")
+		if idx := strings.Index(name, "."); idx > 0 {
+			return name[idx+1:], nil
+		}
+	}
+	return "", nil
 }
