@@ -30,6 +30,10 @@ const quad100 = "100.100.100.100"
 type DNSMutator struct {
 	Client  client.Client
 	Decoder admission.Decoder
+	// Tailnet is the tailnet DNS name (e.g. "corp.ts.net") from TS_TAILNET. When
+	// non-empty, it is prepended to the search list so bare MagicDNS node names
+	// (e.g. "ottawa-k8s-operator") resolve without typing the full FQDN.
+	Tailnet string
 
 	mu         sync.Mutex
 	clusterDNS string // memoized kube-dns ClusterIP
@@ -55,7 +59,7 @@ func (m *DNSMutator) Handle(ctx context.Context, req admission.Request) admissio
 	if clusterDNS == "" {
 		clusterDNS = m.detectClusterDNS(ctx)
 	}
-	applyMemberDNS(pod, dns, req.Namespace, clusterDNS)
+	applyMemberDNS(pod, dns, req.Namespace, clusterDNS, m.Tailnet)
 
 	out, err := json.Marshal(pod)
 	if err != nil {
@@ -68,8 +72,9 @@ func (m *DNSMutator) Handle(ctx context.Context, req admission.Request) admissio
 
 // applyMemberDNS rewrites the pod's resolver to native tailnet DNS: 100.100.100.100 primary
 // (the gateway MagicDNS, which serves the whole tailnet namespace), the cluster resolver
-// secondary for cluster.local, with the standard Kubernetes search list + ndots.
-func applyMemberDNS(pod *corev1.Pod, dns *egressv1.MemberDNS, ns, clusterDNS string) {
+// secondary for cluster.local, with the standard Kubernetes search list + ndots. The tailnet
+// name is prepended to the search list so bare MagicDNS node names resolve.
+func applyMemberDNS(pod *corev1.Pod, dns *egressv1.MemberDNS, ns, clusterDNS, tailnet string) {
 	nameservers := []string{quad100}
 	if clusterDNS != "" {
 		nameservers = append(nameservers, clusterDNS) // secondary: cluster.local over the CNI
@@ -77,6 +82,9 @@ func applyMemberDNS(pod *corev1.Pod, dns *egressv1.MemberDNS, ns, clusterDNS str
 	searches := dns.SearchDomains
 	if len(searches) == 0 {
 		searches = []string{ns + ".svc.cluster.local", "svc.cluster.local", "cluster.local"}
+	}
+	if tailnet != "" {
+		searches = append([]string{tailnet}, searches...)
 	}
 	ndots := "5"
 	if dns.Ndots != nil {

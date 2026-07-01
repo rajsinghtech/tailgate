@@ -12,7 +12,7 @@ import (
 func TestApplyMemberDNS(t *testing.T) {
 	t.Run("defaults", func(t *testing.T) {
 		pod := &corev1.Pod{}
-		applyMemberDNS(pod, &egressv1.MemberDNS{Enabled: true}, "payments", "10.96.0.10")
+		applyMemberDNS(pod, &egressv1.MemberDNS{Enabled: true}, "payments", "10.96.0.10", "corp.ts.net")
 		if pod.Spec.DNSPolicy != corev1.DNSNone {
 			t.Fatalf("DNSPolicy = %q, want None", pod.Spec.DNSPolicy)
 		}
@@ -20,8 +20,8 @@ func TestApplyMemberDNS(t *testing.T) {
 		if len(ns) != 2 || ns[0] != "100.100.100.100" || ns[1] != "10.96.0.10" {
 			t.Fatalf("nameservers = %v, want [100.100.100.100 10.96.0.10]", ns)
 		}
-		if got := pod.Spec.DNSConfig.Searches; len(got) != 3 || got[0] != "payments.svc.cluster.local" {
-			t.Fatalf("searches = %v", got)
+		if got := pod.Spec.DNSConfig.Searches; len(got) != 4 || got[0] != "corp.ts.net" || got[1] != "payments.svc.cluster.local" {
+			t.Fatalf("searches = %v, want [corp.ts.net payments.svc.cluster.local ...]", got)
 		}
 		opt := pod.Spec.DNSConfig.Options
 		if len(opt) != 1 || opt[0].Name != "ndots" || opt[0].Value == nil || *opt[0].Value != "5" {
@@ -31,9 +31,17 @@ func TestApplyMemberDNS(t *testing.T) {
 
 	t.Run("no cluster DNS → quad100 only", func(t *testing.T) {
 		pod := &corev1.Pod{}
-		applyMemberDNS(pod, &egressv1.MemberDNS{Enabled: true}, "default", "")
+		applyMemberDNS(pod, &egressv1.MemberDNS{Enabled: true}, "default", "", "corp.ts.net")
 		if ns := pod.Spec.DNSConfig.Nameservers; len(ns) != 1 || ns[0] != "100.100.100.100" {
 			t.Fatalf("nameservers = %v, want [100.100.100.100]", ns)
+		}
+	})
+
+	t.Run("no tailnet → cluster search only", func(t *testing.T) {
+		pod := &corev1.Pod{}
+		applyMemberDNS(pod, &egressv1.MemberDNS{Enabled: true}, "default", "10.96.0.10", "")
+		if got := pod.Spec.DNSConfig.Searches; len(got) != 3 || got[0] != "default.svc.cluster.local" {
+			t.Fatalf("searches = %v, want cluster-only (no tailnet)", got)
 		}
 	})
 
@@ -44,9 +52,9 @@ func TestApplyMemberDNS(t *testing.T) {
 			Enabled:       true,
 			SearchDomains: []string{"corp.example"},
 			Ndots:         &n,
-		}, "default", "10.0.0.10")
-		if got := pod.Spec.DNSConfig.Searches; len(got) != 1 || got[0] != "corp.example" {
-			t.Fatalf("searches = %v, want [corp.example]", got)
+		}, "default", "10.0.0.10", "corp.ts.net")
+		if got := pod.Spec.DNSConfig.Searches; len(got) != 2 || got[0] != "corp.ts.net" || got[1] != "corp.example" {
+			t.Fatalf("searches = %v, want [corp.ts.net corp.example]", got)
 		}
 		if *pod.Spec.DNSConfig.Options[0].Value != "2" {
 			t.Fatalf("ndots = %s, want 2", *pod.Spec.DNSConfig.Options[0].Value)

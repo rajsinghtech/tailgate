@@ -86,7 +86,7 @@ func main() {
 		os.Exit(1)
 	}
 	mgr.GetWebhookServer().Register("/mutate-v1-pod", &admission.Webhook{
-		Handler: &tgwebhook.DNSMutator{Client: mgr.GetClient(), Decoder: admission.NewDecoder(scheme)},
+		Handler: &tgwebhook.DNSMutator{Client: mgr.GetClient(), Decoder: admission.NewDecoder(scheme), Tailnet: tailnet},
 	})
 
 	log.Info("starting tailgate-operator")
