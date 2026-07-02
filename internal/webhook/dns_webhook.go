@@ -170,7 +170,6 @@ func (m *DNSMutator) resolveTailnet(ctx context.Context) string {
 		return cached
 	}
 	if m.TS == nil {
-		logf.FromContext(ctx).Info("resolveTailnet: TS client is nil, skipping tailnet suffix resolution")
 		return ""
 	}
 	name, err := m.TS.TailnetName(ctx)
@@ -178,7 +177,6 @@ func (m *DNSMutator) resolveTailnet(ctx context.Context) string {
 		logf.FromContext(ctx).Error(err, "resolve tailnet name from API; DNS search list will omit tailnet suffix")
 		return ""
 	}
-	logf.FromContext(ctx).Info("resolveTailnet: resolved tailnet suffix from API", "tailnet", name)
 	if name != "" {
 		m.tailnet.Store(name)
 	}
