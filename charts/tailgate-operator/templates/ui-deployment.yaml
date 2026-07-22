@@ -34,26 +34,28 @@ spec:
           env:
             - name: TAILGATE_UI_ADDR
               value: ":8080"
+            - name: TAILGATE_UI_ADMIN_EMAILS
+              value: {{ .Values.ui.adminEmails | join "," | quote }}
+            {{- if .Values.ui.oauthSecretName }}
             - name: TAILGATE_UI_OAUTH_CLIENT_ID
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.ui.oauthSecretName | default (printf "%s-ui-oauth" (include "tailgate-operator.fullname" .)) }}
+                  name: {{ .Values.ui.oauthSecretName }}
                   key: client_id
             - name: TAILGATE_UI_OAUTH_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.ui.oauthSecretName | default (printf "%s-ui-oauth" (include "tailgate-operator.fullname" .)) }}
+                  name: {{ .Values.ui.oauthSecretName }}
                   key: client_secret
             - name: TAILGATE_UI_OAUTH_REDIRECT_URL
               value: {{ .Values.ui.oauthRedirectURL | quote }}
             - name: TAILGATE_UI_SESSION_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.ui.oauthSecretName | default (printf "%s-ui-oauth" (include "tailgate-operator.fullname" .)) }}
+                  name: {{ .Values.ui.oauthSecretName }}
                   key: session_key
                   optional: true
-            - name: TAILGATE_UI_ADMIN_EMAILS
-              value: {{ .Values.ui.adminEmails | join "," | quote }}
+            {{- end }}
           {{- with .Values.ui.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
