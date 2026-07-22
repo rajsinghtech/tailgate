@@ -111,8 +111,16 @@ Agent container image
 
 {{/*
 Gateway container image (stamped into the per-group gateway workloads by the operator)
-*/}}
+*/
 {{- define "tailgate-operator.gateway.image" -}}
 {{- $tag := default .Chart.AppVersion .Values.gateway.image.tag }}
 {{- printf "%s:%s" .Values.gateway.image.repository $tag }}
+{{- end }}
+
+{{/*
+UI container image
+*/
+{{- define "tailgate-operator.ui.image" -}}
+{{- $tag := default .Chart.AppVersion .Values.ui.image.tag }}
+{{- printf "%s:%s" .Values.ui.image.repository $tag }}
 {{- end }}
