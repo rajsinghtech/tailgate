@@ -72,17 +72,28 @@ func TestIsAdmin(t *testing.T) {
 	}
 }
 
-func TestStateCache(t *testing.T) {
-	c := newStateCache()
-	c.put("abc")
-	if !c.take("abc") {
-		t.Fatal("first take should succeed")
+func TestStatelessState(t *testing.T) {
+	h := &Handler{cfg: Config{SessionKey: []byte("test-key-that-is-long-enough-32b")}}
+	state := h.signState()
+	if !h.verifyState(state) {
+		t.Fatal("valid state should verify")
 	}
-	if c.take("abc") {
-		t.Fatal("second take should fail (consumed)")
+	if h.verifyState("garbage") {
+		t.Fatal("garbage state should not verify")
 	}
-	if c.take("never-existed") {
-		t.Fatal("nonexistent state should fail")
+	if h.verifyState("aaa.bbb") {
+		t.Fatal("tampered state should not verify")
+	}
+}
+
+func TestStatelessStateCrossPod(t *testing.T) {
+	// Two handlers with the same key (two pods sharing the session key)
+	key := []byte("shared-key-that-is-long-enough-32")
+	h1 := &Handler{cfg: Config{SessionKey: key}}
+	h2 := &Handler{cfg: Config{SessionKey: key}}
+	state := h1.signState()
+	if !h2.verifyState(state) {
+		t.Fatal("state issued by pod 1 must verify on pod 2 (shared key)")
 	}
 }
 
