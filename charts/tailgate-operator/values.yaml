@@ -85,6 +85,47 @@ gateway:
     # -- Overrides the gateway image tag (default is the chart appVersion)
     tag: ""
 
+# Management web UI. Authenticates users via Tailscale OAuth (identity-only)
+# and reads/writes EgressGroup CRs. Users see their own groups; admins see all.
+# Requires a separate Tailscale OAuth app (create under Settings → OAuth apps,
+# no scopes needed — identity only). The redirect URL must match
+# TAILGATE_UI_OAUTH_REDIRECT_URL exactly.
+ui:
+  # -- Deploy the management UI
+  enabled: false
+  image:
+    # -- UI container image repository
+    repository: ghcr.io/rajsinghtech/tailgate-ui
+    # -- Image pull policy
+    pullPolicy: IfNotPresent
+    # -- Overrides the image tag (default is the chart appVersion)
+    tag: ""
+  # -- Number of UI replicas (stateless; scale freely)
+  replicaCount: 2
+  # -- OAuth app credentials. Create a Secret with keys client_id, client_secret,
+  # and optionally session_key. Set oauthSecretName to reference an existing Secret,
+  # or use the values below to create one.
+  oauthSecretName: ""
+  oauthClientID: ""
+  oauthClientSecret: ""
+  oauthRedirectURL: ""
+  # -- Session key for signing cookies (32+ bytes hex). If empty, a random one
+  # is generated per pod restart (sessions don't survive restarts). Set for production.
+  sessionKey: ""
+  # -- Comma-separated list of admin emails who can see and manage all groups.
+  adminEmails: []
+  service:
+    # -- Service type for the UI
+    type: ClusterIP
+  # Resource requests and limits for the UI
+  resources:
+    limits:
+      cpu: 200m
+      memory: 128Mi
+    requests:
+      cpu: 10m
+      memory: 64Mi
+
 # DNS mutating webhook. When an EgressGroup sets dns.enabled, member pods it selects get
 # native tailnet DNS (resolver = the gateway's 100.100.100.100, cluster.local kept on
 # CoreDNS). The operator self-signs the serving cert (no cert-manager dependency).

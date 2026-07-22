@@ -45,3 +45,4 @@ dist/
 CLAUDE.md
 .claude/
 .claude.worktrees/
+tailgate-ui
