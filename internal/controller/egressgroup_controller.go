@@ -131,10 +131,15 @@ func isAutoExitNode(name string) bool {
 }
 
 // memberNodes lists pods matching the EgressGroup's selector and returns the distinct
-// node names they run on. Used for auto-follow scheduling: the gateway DaemonSet lands
-// only on these nodes. In static-pin mode (spec.gateway.nodeSelector set) the caller
-// ignores the result and the DaemonSet uses the selector. Returns nil when no pods match
-// or the selector is empty (matches nothing per wiring.MatchGroup).
+// node names they are scheduled on. Used for auto-follow scheduling: the gateway
+// DaemonSet lands only on these nodes. In static-pin mode (spec.gateway.nodeSelector
+// set) the caller ignores the result and the DaemonSet uses the selector. Returns nil
+// when no pods match or the selector is empty (matches nothing per wiring.MatchGroup).
+//
+// A pod counts as soon as it has a nodeName (is scheduled), not when it's Running —
+// the gateway needs to be on the node before the member pod's agent wiring runs, so
+// triggering on schedule rather than Running minimizes the gap. The pod watch predicate
+// fires on nodeName changes (Pending→scheduled), which is what drives the re-scope.
 func (r *EgressGroupReconciler) memberNodes(ctx context.Context, eg *egressv1.EgressGroup, l logr.Logger) []string {
 	sel := eg.Spec.Selector
 	// An empty selector (no podSelector AND no namespaceSelector) matches nothing —
@@ -157,8 +162,8 @@ func (r *EgressGroupReconciler) memberNodes(ctx context.Context, eg *egressv1.Eg
 	var nodes []string
 	for i := range pods.Items {
 		p := &pods.Items[i]
-		if p.Spec.NodeName == "" || p.Status.Phase != corev1.PodRunning {
-			continue
+		if p.Spec.NodeName == "" {
+			continue // not scheduled yet
 		}
 		nsLabels, ok := nsCache[p.Namespace]
 		if !ok {

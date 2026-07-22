@@ -45,6 +45,8 @@ func TestGatewayHostnamePerNode(t *testing.T) {
 		},
 	}), "create egressgroup")
 	t.Cleanup(func() { deleteEGWait(kc, name) })
+	member := runPod(t, ctx, cs, "hn-member", map[string]string{"egress": name})
+	t.Cleanup(func() { _ = cs.CoreV1().Pods("default").Delete(context.Background(), member, *metav1.NewDeleteOptions(0)) })
 	waitGatewayReady(t, ctx, cs, name)
 
 	// Re-fetch the current gateway pod each iteration (the DaemonSet can briefly roll a pod

@@ -112,8 +112,8 @@ func TestEgressDatapath(t *testing.T) {
 	}), "create egressgroup")
 	t.Cleanup(func() { deleteEGWait(kc, "e2e") }) // finalizer device-delete runs before tailnet Close
 
-	waitGatewayReady(t, ctx, cs, "e2e")
 	member := runPod(t, ctx, cs, "e2e-member", map[string]string{"egress": "e2e"})
+	waitGatewayReady(t, ctx, cs, "e2e")
 	other := runPod(t, ctx, cs, "e2e-nonmember", map[string]string{"app": "web"})
 	t.Cleanup(func() {
 		_ = cs.CoreV1().Pods("default").Delete(context.Background(), member, *metav1.NewDeleteOptions(0))

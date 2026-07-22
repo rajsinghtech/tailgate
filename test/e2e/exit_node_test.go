@@ -70,6 +70,11 @@ func TestExitNodeFullTunnel(t *testing.T) {
 		},
 	}), "create egressgroup")
 	t.Cleanup(func() { deleteEGWait(kc, name) })
+
+	member := runPod(t, ctx, cs, "exit-member", map[string]string{"egress": name})
+	t.Cleanup(func() {
+		_ = cs.CoreV1().Pods("default").Delete(context.Background(), member, *metav1.NewDeleteOptions(0))
+	})
 	waitGatewayReady(t, ctx, cs, name)
 
 	// 5. the gateway must have COMMITTED the exit-node selection (else traversal isn't
@@ -81,11 +86,6 @@ func TestExitNodeFullTunnel(t *testing.T) {
 		return gatewayExitNodeID(t, ctx, cfg, cs, gw.Name) != "", nil
 	}), "gateway committed exit-node selection")
 	t.Logf("PASS: gateway committed exit node %s", exitCGNAT)
-
-	member := runPod(t, ctx, cs, "exit-member", map[string]string{"egress": name})
-	t.Cleanup(func() {
-		_ = cs.CoreV1().Pods("default").Delete(context.Background(), member, *metav1.NewDeleteOptions(0))
-	})
 
 	// 6. member-side full-tunnel plumbing is installed (table 7717 + from-rule).
 	if err := wait.PollUntilContextTimeout(ctx, 3*time.Second, 60*time.Second, true, func(ctx context.Context) (bool, error) {

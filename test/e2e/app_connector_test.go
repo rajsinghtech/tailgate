@@ -86,9 +86,9 @@ func TestAppConnectorReachability(t *testing.T) {
 		},
 	}), "create egressgroup")
 	t.Cleanup(func() { deleteEGWait(kc, name) })
-	waitGatewayReady(t, ctx, cs, name)
 
 	member := runPod(t, ctx, cs, "appc-member", map[string]string{"egress": name})
+	waitGatewayReady(t, ctx, cs, name)
 	other := runPod(t, ctx, cs, "appc-nonmember", map[string]string{"app": "web"})
 	t.Cleanup(func() {
 		_ = cs.CoreV1().Pods("default").Delete(context.Background(), member, *metav1.NewDeleteOptions(0))
