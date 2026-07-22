@@ -1,9 +1,8 @@
 // Package ui implements the tailgate-ui HTTP server: a small HTMX-driven web
-// UI for managing EgressGroups. Users authenticate via Tailscale OAuth (handled
-// by internal/auth), and the UI reads/writes EgressGroup CRs through the kube
-// API. Authorization is owner-based: each EgressGroup carries an
-// `tailgate.dev/owner` annotation set at create time; non-admins see only their
-// own groups.
+// UI for managing EgressGroups. Authentication is handled by the gateway
+// (tinyauth injects a Remote-Email header) — the UI reads the header and
+// treats it as the authenticated identity. For standalone deployments without
+// a gateway, an optional Tailscale OAuth fallback is supported.
 package ui
 
 import (
@@ -32,23 +31,26 @@ const ownerAnnotation = "tailgate.dev/owner"
 
 // Server is the UI HTTP server.
 type Server struct {
-	kc     client.Client
-	scheme *runtime.Scheme
-	auth   *auth.Handler
-	log    *slog.Logger
-	tmpl   *template.Template
+	kc        client.Client
+	scheme    *runtime.Scheme
+	auth      *auth.Handler
+	log       *slog.Logger
+	tmpl      *template.Template
+	adminEmails []string
 }
 
 // NewServer returns a UI server wired to the given kube client and auth handler.
-func NewServer(kc client.Client, scheme *runtime.Scheme, authHandler *auth.Handler, log *slog.Logger) *Server {
+// authHandler may be nil when running behind a gateway that injects Remote-Email.
+func NewServer(kc client.Client, scheme *runtime.Scheme, authHandler *auth.Handler, adminEmails []string, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
 	s := &Server{
-		kc:     kc,
-		scheme: scheme,
-		auth:   authHandler,
-		log:    log,
+		kc:          kc,
+		scheme:      scheme,
+		auth:        authHandler,
+		adminEmails: adminEmails,
+		log:         log,
 	}
 	s.tmpl = template.Must(template.New("").Funcs(funcMap).Parse(tmplStr))
 	return s
@@ -58,29 +60,68 @@ func NewServer(kc client.Client, scheme *runtime.Scheme, authHandler *auth.Handl
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	// Auth routes (unauthenticated).
-	mux.Handle("/login", s.auth)
-	mux.Handle("/callback", s.auth)
-	mux.Handle("/logout", s.auth)
+	// OAuth routes (only when auth handler is configured for standalone mode).
+	if s.auth != nil {
+		mux.Handle("/login", s.auth)
+		mux.Handle("/callback", s.auth)
+		mux.Handle("/logout", s.auth)
+	}
 
 	// Static.
 	mux.HandleFunc("/static/style.css", s.serveCSS)
 
-	// Authenticated routes.
-	authed := s.auth.Middleware(http.HandlerFunc(s.handleAuthed))
-	mux.Handle("/", authed)
-	mux.Handle("/groups/", authed)
-	mux.Handle("/groups/new", authed)
-	mux.Handle("/groups/create", authed)
-	mux.Handle("/groups/delete/", authed)
+	// All other routes go through the identity middleware.
+	mux.Handle("/", s.identityMiddleware(http.HandlerFunc(s.handleAuthed)))
+	mux.Handle("/groups/", s.identityMiddleware(http.HandlerFunc(s.handleAuthed)))
+	mux.Handle("/groups/new", s.identityMiddleware(http.HandlerFunc(s.handleAuthed)))
+	mux.Handle("/groups/create", s.identityMiddleware(http.HandlerFunc(s.handleAuthed)))
+	mux.Handle("/groups/delete/", s.identityMiddleware(http.HandlerFunc(s.handleAuthed)))
 
 	return mux
+}
+
+// identityMiddleware extracts the user identity. It tries the gateway-injected
+// Remote-Email header first (tinyauth), then falls back to the OAuth session
+// cookie if an auth handler is configured. Unauthenticated requests get a 401
+// (the gateway handles the redirect to the login page).
+func (s *Server) identityMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Gateway mode: tinyauth injects Remote-Email.
+		if email := r.Header.Get("Remote-Email"); email != "" {
+			sess := &auth.Session{Email: email, LoginName: email, Expires: time.Now().Add(24 * time.Hour).Unix()}
+			r = r.WithContext(auth.WithSession(r.Context(), sess))
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// OAuth fallback (standalone mode).
+		if s.auth != nil {
+			s.auth.Middleware(next).ServeHTTP(w, r)
+			return
+		}
+
+		// No identity — 401 (gateway/tinyauth handles the redirect).
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	})
 }
 
 func (s *Server) serveCSS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/css; charset=utf-8")
 	w.Header().Set("Cache-Control", "public, max-age=300")
 	_, _ = w.Write([]byte(cssStr))
+}
+
+// isAdmin reports whether the session user is in the admin allowlist.
+func (s *Server) isAdmin(sess *auth.Session) bool {
+	if sess == nil {
+		return false
+	}
+	for _, e := range s.adminEmails {
+		if strings.EqualFold(e, sess.Email) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) handleAuthed(w http.ResponseWriter, r *http.Request) {
@@ -136,7 +177,7 @@ func (s *Server) listGroups(w http.ResponseWriter, r *http.Request, sess *auth.S
 		return
 	}
 
-	isAdmin := s.auth.IsAdmin(sess)
+	isAdmin := s.isAdmin(sess)
 	var views []groupView
 	for i := range groups.Items {
 		g := &groups.Items[i]
@@ -170,7 +211,7 @@ type formData struct {
 }
 
 func (s *Server) newGroupForm(w http.ResponseWriter, r *http.Request, sess *auth.Session) {
-	s.render(w, "form", formData{Session: sess, IsAdmin: s.auth.IsAdmin(sess)})
+	s.render(w, "form", formData{Session: sess, IsAdmin: s.isAdmin(sess)})
 }
 
 func (s *Server) createGroup(w http.ResponseWriter, r *http.Request, sess *auth.Session) {
@@ -248,7 +289,7 @@ func (s *Server) deleteGroup(w http.ResponseWriter, r *http.Request, sess *auth.
 	}
 
 	owner := eg.Annotations[ownerAnnotation]
-	if !s.auth.IsAdmin(sess) && !strings.EqualFold(owner, sess.Email) {
+	if !s.isAdmin(sess) && !strings.EqualFold(owner, sess.Email) {
 		s.renderError(w, "Not authorized to delete this group", http.StatusForbidden)
 		return
 	}
@@ -277,7 +318,7 @@ func (s *Server) viewGroup(w http.ResponseWriter, r *http.Request, sess *auth.Se
 	}
 
 	owner := eg.Annotations[ownerAnnotation]
-	if !s.auth.IsAdmin(sess) && !strings.EqualFold(owner, sess.Email) {
+	if !s.isAdmin(sess) && !strings.EqualFold(owner, sess.Email) {
 		s.renderError(w, "Not authorized to view this group", http.StatusForbidden)
 		return
 	}
@@ -304,7 +345,7 @@ func (s *Server) viewGroup(w http.ResponseWriter, r *http.Request, sess *auth.Se
 		Session *auth.Session
 		IsAdmin bool
 		Group   groupView
-	}{Session: sess, IsAdmin: s.auth.IsAdmin(sess), Group: v})
+	}{Session: sess, IsAdmin: s.isAdmin(sess), Group: v})
 }
 
 func (s *Server) render(w http.ResponseWriter, name string, data any) {
