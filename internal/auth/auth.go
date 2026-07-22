@@ -75,6 +75,7 @@ func (h *Handler) LoginURL(state string) string {
 		"redirect_uri":  {h.cfg.RedirectURL},
 		"response_type": {"code"},
 		"state":         {state},
+		"scope":         {"auth_keys:create:once"},
 	}
 	return loginBase + "/a/oauth_authorize?" + q.Encode()
 }
