@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"time"
 
@@ -10,13 +11,20 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	egressv1 "github.com/rajsinghtech/tailgate/api/v1alpha1"
 	"github.com/rajsinghtech/tailgate/internal/tsclient"
+	"github.com/rajsinghtech/tailgate/internal/wiring"
 )
 
 const finalizer = "tailgate.dev/finalizer"
@@ -71,16 +79,21 @@ func (r *EgressGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err := r.applyOwned(ctx, &eg, cm); err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.applyOwned(ctx, &eg, gatewayDaemonSet(&eg, r.Namespace, r.GWImage, r.Tailnet)); err != nil {
+
+	// Compute the member-node set for auto-follow scheduling. In static-pin mode
+	// (spec.gateway.nodeSelector set) this is unused — the DaemonSet uses the selector.
+	memberNodes := r.memberNodes(ctx, &eg, l)
+	if err := r.applyOwned(ctx, &eg, gatewayDaemonSet(&eg, r.Namespace, r.GWImage, r.Tailnet, memberNodes)); err != nil {
 		return ctrl.Result{}, err
 	}
 
 	eg.Status.GatewayHostname = gatewayName(eg.Name)
 	eg.Status.ResolvedExitNode = exitNodeID
+	eg.Status.GatewayNodes = memberNodes
 	if err := r.Status().Update(ctx, &eg); err != nil {
 		return ctrl.Result{}, err
 	}
-	l.Info("reconciled", "group", eg.Name)
+	l.Info("reconciled", "group", eg.Name, "memberNodes", memberNodes)
 	// Re-resolve an auto-selected exit node periodically so a node going offline fails over.
 	if en := eg.Spec.ExitNode; en != nil && isAutoExitNode(en.Name) {
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
@@ -115,6 +128,93 @@ func (r *EgressGroupReconciler) effectiveExitNode(ctx context.Context, eg *egres
 // "auto:" prefix), matching how tailscaled's ParseAutoExitNodeString treats the value.
 func isAutoExitNode(name string) bool {
 	return name == "auto" || strings.HasPrefix(name, "auto:")
+}
+
+// memberNodes lists pods matching the EgressGroup's selector and returns the distinct
+// node names they run on. Used for auto-follow scheduling: the gateway DaemonSet lands
+// only on these nodes. In static-pin mode (spec.gateway.nodeSelector set) the caller
+// ignores the result and the DaemonSet uses the selector. Returns nil when no pods match
+// or the selector is empty (matches nothing per wiring.MatchGroup).
+func (r *EgressGroupReconciler) memberNodes(ctx context.Context, eg *egressv1.EgressGroup, l logr.Logger) []string {
+	sel := eg.Spec.Selector
+	// An empty selector (no podSelector AND no namespaceSelector) matches nothing —
+	// wiring.MatchGroup skips it. Short-circuit to avoid a full pod list.
+	if sel.PodSelector == nil && sel.NamespaceSelector == nil {
+		return nil
+	}
+
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods); err != nil {
+		l.Error(err, "list pods for member-node computation")
+		return nil
+	}
+
+	// Build a namespace-label cache so wiring.MatchGroup can evaluate namespaceSelector.
+	nsCache := map[string]map[string]string{}
+	matchPods := []egressv1.EgressGroup{*eg}
+
+	seen := map[string]bool{}
+	var nodes []string
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if p.Spec.NodeName == "" || p.Status.Phase != corev1.PodRunning {
+			continue
+		}
+		nsLabels, ok := nsCache[p.Namespace]
+		if !ok {
+			var nsObj corev1.Namespace
+			if err := r.Get(ctx, client.ObjectKey{Name: p.Namespace}, &nsObj); err != nil {
+				nsLabels = map[string]string{}
+			} else {
+				nsLabels = nsObj.Labels
+			}
+			nsCache[p.Namespace] = nsLabels
+		}
+		if wiring.MatchGroup(p, nsLabels, matchPods) == "" {
+			continue
+		}
+		if !seen[p.Spec.NodeName] {
+			seen[p.Spec.NodeName] = true
+			nodes = append(nodes, p.Spec.NodeName)
+		}
+	}
+	return nodes
+}
+
+// allEgressGroups is the map function for the pod watch: it enqueues every EgressGroup
+// for reconciliation when a relevant pod event fires. The predicate (set in
+// SetupWithManager) filters to pod create/delete and scheduling/label changes, so the
+// noise is bounded. With a handful of EgressGroups this is cheaper than evaluating
+// selectors in the map function (which would need namespace-label lookups).
+func (r *EgressGroupReconciler) allEgressGroups(ctx context.Context, _ client.Object) []reconcile.Request {
+	var groups egressv1.EgressGroupList
+	if err := r.List(ctx, &groups); err != nil {
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(groups.Items))
+	for i := range groups.Items {
+		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: groups.Items[i].Name}})
+	}
+	return reqs
+}
+
+// podScheduleChanged is the predicate for the pod watch: it fires on pod create/delete
+// and on updates where spec.nodeName or metadata.labels changed — the only transitions
+// that affect the member-node set. Spec/status-only updates (image pulls, condition
+// flips) are ignored to avoid unnecessary reconciles.
+var podScheduleChanged = predicate.Funcs{
+	CreateFunc: func(event.CreateEvent) bool { return true },
+	DeleteFunc: func(event.DeleteEvent) bool { return true },
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		oldPod, okOld := e.ObjectOld.(*corev1.Pod)
+		newPod, okNew := e.ObjectNew.(*corev1.Pod)
+		if !okOld || !okNew {
+			return true
+		}
+		return oldPod.Spec.NodeName != newPod.Spec.NodeName ||
+			!reflect.DeepEqual(oldPod.Labels, newPod.Labels)
+	},
+	GenericFunc: func(event.GenericEvent) bool { return false },
 }
 
 // applyOwned create-or-updates obj with eg as controller owner (for GC).
@@ -152,6 +252,11 @@ func (r *EgressGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&appsv1.DaemonSet{}).
 		Owns(&corev1.Secret{}).
 		Owns(&corev1.ConfigMap{}).
+		// Watch pods so auto-follow scheduling reacts to member pods appearing on
+		// new nodes or draining from old ones. The predicate filters to scheduling
+		// transitions; the map function enqueues all EgressGroups (selector matching
+		// happens in the reconcile loop).
+		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.allEgressGroups), builder.WithPredicates(podScheduleChanged)).
 		Named("egressgroup").
 		Complete(r)
 }
