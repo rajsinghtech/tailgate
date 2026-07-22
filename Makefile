@@ -14,7 +14,6 @@ IMG_TAG ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 OPERATOR_IMG ?= $(REGISTRY)-operator:$(IMG_TAG)
 AGENT_IMG    ?= $(REGISTRY)-agent:$(IMG_TAG)
 GATEWAY_IMG  ?= $(REGISTRY)-gateway:$(IMG_TAG)
-UI_IMG       ?= $(REGISTRY)-ui:$(IMG_TAG)
 
 # Container tool. Tested with docker; override for podman etc.
 CONTAINER_TOOL ?= docker
@@ -82,12 +81,11 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes.
 # The agent is linux-only, so everything is cross-compiled for linux. GOWORK=off
 # keeps the parent go.work out of the build.
 .PHONY: build
-build: generate fmt vet ## Build all five binaries into bin/ (cross-compiled for linux).
+build: generate fmt vet ## Build all four binaries into bin/ (cross-compiled for linux).
 	GOWORK=off CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) go build -o bin/tailgate-operator ./cmd/tailgate-operator
 	GOWORK=off CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) go build -o bin/tailgate-agent    ./cmd/tailgate-agent
 	GOWORK=off CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) go build -o bin/tailgate-cni      ./cmd/tailgate-cni
 	GOWORK=off CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) go build -o bin/tailgate-gateway  ./cmd/tailgate-gateway
-	GOWORK=off CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) go build -o bin/tailgate-ui       ./cmd/tailgate-ui
 
 ##@ Images
 
@@ -97,18 +95,16 @@ build: generate fmt vet ## Build all five binaries into bin/ (cross-compiled for
 DOCKER_DIR ?= deploy/docker
 
 .PHONY: docker-build
-docker-build: ## Build the four images (operator, agent, gateway, ui) from source.
+docker-build: ## Build the three images (operator, agent, gateway) from source.
 	$(CONTAINER_TOOL) build -t $(OPERATOR_IMG) -f $(DOCKER_DIR)/Dockerfile.operator .
 	$(CONTAINER_TOOL) build -t $(AGENT_IMG)    -f $(DOCKER_DIR)/Dockerfile.agent    .
 	$(CONTAINER_TOOL) build -t $(GATEWAY_IMG)  -f $(DOCKER_DIR)/Dockerfile.gateway  .
-	$(CONTAINER_TOOL) build -t $(UI_IMG)       -f $(DOCKER_DIR)/Dockerfile.ui       .
 
 .PHONY: docker-push
-docker-push: ## Push the four images to ghcr.
+docker-push: ## Push the three images to ghcr.
 	$(CONTAINER_TOOL) push $(OPERATOR_IMG)
 	$(CONTAINER_TOOL) push $(AGENT_IMG)
 	$(CONTAINER_TOOL) push $(GATEWAY_IMG)
-	$(CONTAINER_TOOL) push $(UI_IMG)
 
 .PHONY: kind-load
 kind-load: docker-build ## Build and load the three images into the kind cluster.
