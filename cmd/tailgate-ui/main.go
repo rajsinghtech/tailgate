@@ -1,7 +1,7 @@
-// tailgate-ui is the management web UI for EgressGroups. It authenticates users
-// via Tailscale OAuth (identity-only) and reads/writes EgressGroup CRs through
-// the kube API. Users see their own groups; admins see all. The operator is
-// unchanged — it reconciles the CRs the UI writes.
+// tailgate-ui is the management web UI for EgressGroups. In production it runs
+// behind a gateway with tinyauth, which injects a Remote-Email header for
+// identity. For standalone deployments, an optional Tailscale OAuth fallback
+// is supported (set TAILGATE_UI_OAUTH_CLIENT_ID to enable it).
 package main
 
 import (
@@ -58,40 +58,36 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Session key: generate a random one if not provided (resets cookies on restart,
-	// which is fine for dev). In production, set TAILGATE_UI_SESSION_KEY to a stable
-	// 32-byte hex string so sessions survive restarts.
-	sessionKey := []byte(getenv("TAILGATE_UI_SESSION_KEY", ""))
-	if len(sessionKey) < 32 {
-		sessionKey = make([]byte, 32)
-		_, _ = rand.Read(sessionKey)
-		log.Info("generated ephemeral session key (set TAILGATE_UI_SESSION_KEY for persistence)")
-	}
-
 	// Admin emails: comma-separated list from env.
 	var admins []string
 	if a := getenv("TAILGATE_UI_ADMIN_EMAILS", ""); a != "" {
 		admins = append(admins, splitComma(a)...)
 	}
 
-	authCfg := auth.Config{
-		ClientID:     getenv("TAILGATE_UI_OAUTH_CLIENT_ID", ""),
-		ClientSecret: getenv("TAILGATE_UI_OAUTH_CLIENT_SECRET", ""),
-		RedirectURL:  getenv("TAILGATE_UI_OAUTH_REDIRECT_URL", ""),
-		SessionKey:   sessionKey,
-		AdminEmails:  admins,
-	}
-	if authCfg.ClientID == "" || authCfg.ClientSecret == "" {
-		log.Error("TAILGATE_UI_OAUTH_CLIENT_ID and TAILGATE_UI_OAUTH_CLIENT_SECRET are required")
-		os.Exit(1)
-	}
-	if authCfg.RedirectURL == "" {
-		log.Error("TAILGATE_UI_OAUTH_REDIRECT_URL is required (e.g. https://tailgate-ui.corp.ts.net/callback)")
-		os.Exit(1)
+	// OAuth fallback: only enabled when client ID is set. In gateway mode
+	// (tinyauth injects Remote-Email), OAuth is not needed.
+	var authHandler *auth.Handler
+	oauthClientID := getenv("TAILGATE_UI_OAUTH_CLIENT_ID", "")
+	if oauthClientID != "" {
+		sessionKey := []byte(getenv("TAILGATE_UI_SESSION_KEY", ""))
+		if len(sessionKey) < 32 {
+			sessionKey = make([]byte, 32)
+			_, _ = rand.Read(sessionKey)
+			log.Info("generated ephemeral session key (set TAILGATE_UI_SESSION_KEY for persistence)")
+		}
+		authCfg := auth.Config{
+			ClientID:     oauthClientID,
+			ClientSecret: getenv("TAILGATE_UI_OAUTH_CLIENT_SECRET", ""),
+			RedirectURL:  getenv("TAILGATE_UI_OAUTH_REDIRECT_URL", ""),
+			SessionKey:   sessionKey,
+		}
+		authHandler = auth.NewHandler(authCfg, log)
+		log.Info("OAuth fallback enabled (gateway mode is primary)")
+	} else {
+		log.Info("running in gateway mode (expects Remote-Email header from tinyauth)")
 	}
 
-	authHandler := auth.NewHandler(authCfg, log)
-	srv := ui.NewServer(kc, scheme, authHandler, log)
+	srv := ui.NewServer(kc, scheme, authHandler, admins, log)
 
 	log.Info("starting tailgate-ui", "addr", *addr, "version", version, "commit", commit, "buildDate", buildDate)
 	if err := listenAndServe(*addr, srv.Handler()); err != nil {
