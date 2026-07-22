@@ -9,6 +9,7 @@ import (
 	"flag"
 	"log/slog"
 	"os"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -70,9 +71,7 @@ func main() {
 	// Admin emails: comma-separated list from env.
 	var admins []string
 	if a := getenv("TAILGATE_UI_ADMIN_EMAILS", ""); a != "" {
-		for _, e := range splitComma(a) {
-			admins = append(admins, e)
-		}
+		admins = append(admins, splitComma(a)...)
 	}
 
 	authCfg := auth.Config{
@@ -103,34 +102,10 @@ func main() {
 
 func splitComma(s string) []string {
 	var out []string
-	for _, v := range splitStr(s, ",") {
-		if v != "" {
+	for _, v := range strings.Split(s, ",") {
+		if v = strings.TrimSpace(v); v != "" {
 			out = append(out, v)
 		}
 	}
 	return out
-}
-
-func splitStr(s, sep string) []string {
-	var out []string
-	rest := s
-	for {
-		i := indexOf(rest, sep)
-		if i < 0 {
-			out = append(out, rest)
-			break
-		}
-		out = append(out, rest[:i])
-		rest = rest[i+len(sep):]
-	}
-	return out
-}
-
-func indexOf(s, sub string) int {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
 }
