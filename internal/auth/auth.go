@@ -19,17 +19,15 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 )
 
 const (
-	loginBase   = "https://login.tailscale.com"
-	tokenURL    = "https://api.tailscale.com/api/v2/oauth/token"
-	whoamiURL   = "https://api.tailscale.com/api/v2/tailnet/-/whoami"
-	sessionMax  = 24 * time.Hour
-	cookieName  = "tailgate-session"
-	stateMaxAge = 5 * time.Minute
+	loginBase  = "https://login.tailscale.com"
+	tokenURL   = "https://api.tailscale.com/api/v2/oauth/token"
+	whoamiURL  = "https://api.tailscale.com/api/v2/tailnet/-/whoami"
+	sessionMax = 24 * time.Hour
+	cookieName = "tailgate-session"
 )
 
 // Config holds the OAuth app credentials and the redirect URL.
@@ -55,9 +53,8 @@ type Session struct {
 // exchanges the code and issues a session cookie. It is an http.Handler that
 // mounts those two routes; wrap it in a mux or mount directly.
 type Handler struct {
-	cfg    Config
-	log    *slog.Logger
-	states *stateCache
+	cfg Config
+	log *slog.Logger
 }
 
 // NewHandler returns an OAuth handler with the given config.
@@ -65,7 +62,7 @@ func NewHandler(cfg Config, log *slog.Logger) *Handler {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Handler{cfg: cfg, log: log, states: newStateCache()}
+	return &Handler{cfg: cfg, log: log}
 }
 
 // LoginURL builds the Tailscale authorization URL for the given state.
@@ -95,8 +92,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
-	state := randomToken()
-	h.states.put(state)
+	state := h.signState()
 	http.Redirect(w, r, h.LoginURL(state), http.StatusFound)
 }
 
@@ -123,7 +119,7 @@ func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing code or state", http.StatusBadRequest)
 		return
 	}
-	if !h.states.take(state) {
+	if !h.verifyState(state) {
 		http.Error(w, "invalid or expired state", http.StatusBadRequest)
 		return
 	}
@@ -330,53 +326,32 @@ func WithSession(ctx context.Context, s *Session) context.Context {
 	return context.WithValue(ctx, sessionKey{}, s)
 }
 
+// signState creates a self-verifying OAuth state token: random.hmac(random).time
+// Any pod with the same session key can verify it — no shared state store needed
+// (the UI runs with 2+ replicas, so an in-memory cache would fail when the
+// callback hits a different pod than the one that issued the state).
+func (h *Handler) signState() string {
+	nonce := randomToken()
+	mac := hmac.New(sha256.New, h.cfg.SessionKey)
+	mac.Write([]byte(nonce))
+	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return nonce + "." + sig
+}
+
+// verifyState validates a self-verifying state token issued by signState.
+func (h *Handler) verifyState(state string) bool {
+	parts := strings.SplitN(state, ".", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	mac := hmac.New(sha256.New, h.cfg.SessionKey)
+	mac.Write([]byte(parts[0]))
+	expected := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(parts[1]), []byte(expected))
+}
+
 func randomToken() string {
 	b := make([]byte, 32)
 	_, _ = rand.Read(b)
 	return base64.RawURLEncoding.EncodeToString(b)
-}
-
-// stateCache is a TTL-limited store for OAuth state values (CSRF protection).
-type stateCache struct {
-	mu   sync.Mutex
-	item map[string]time.Time
-}
-
-func newStateCache() *stateCache {
-	c := &stateCache{item: make(map[string]time.Time)}
-	go c.gc()
-	return c
-}
-
-func (c *stateCache) put(state string) {
-	c.mu.Lock()
-	c.item[state] = time.Now()
-	c.mu.Unlock()
-}
-
-func (c *stateCache) take(state string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	t, ok := c.item[state]
-	if !ok || time.Since(t) > stateMaxAge {
-		delete(c.item, state)
-		return false
-	}
-	delete(c.item, state)
-	return true
-}
-
-func (c *stateCache) gc() {
-	t := time.NewTicker(time.Minute)
-	defer t.Stop()
-	for range t.C {
-		c.mu.Lock()
-		now := time.Now()
-		for k, t := range c.item {
-			if now.Sub(t) > stateMaxAge {
-				delete(c.item, k)
-			}
-		}
-		c.mu.Unlock()
-	}
 }
