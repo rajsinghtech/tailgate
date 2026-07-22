@@ -21,10 +21,11 @@ import (
 )
 
 var (
-	version   = "dev"
-	commit    = "unknown"
-	buildDate = "unknown"
+	version = "dev"
+	commit  = "unknown"
 )
+
+var buildDate = "unknown"
 
 func getenv(k, def string) string {
 	if v := os.Getenv(k); v != "" {
@@ -93,7 +94,7 @@ func main() {
 	authHandler := auth.NewHandler(authCfg, log)
 	srv := ui.NewServer(kc, scheme, authHandler, log)
 
-	log.Info("starting tailgate-ui", "addr", *addr, "version", version, "commit", commit)
+	log.Info("starting tailgate-ui", "addr", *addr, "version", version, "commit", commit, "buildDate", buildDate)
 	if err := listenAndServe(*addr, srv.Handler()); err != nil {
 		log.Error("server", "err", err)
 		os.Exit(1)
