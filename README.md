@@ -25,7 +25,8 @@ laptop running Tailscale does.
 ## Features
 
 - **Whole-tailnet egress, natively** — members reach any tailnet peer (`100.64.0.0/10` and the IPv6 ULA), advertised subnet-router CIDR, app-connector range, or full-tunnel exit node, by IP and over any protocol (TCP, UDP, ICMP, …). The gateway is a kernel-mode `tailscaled`, so this is real L3 routing, not an L4 port forward — and there is no per-destination Service to declare.
-- **Pods don't add tailnet devices** — the gateway is a node-local DaemonSet (one shared tailnet device per node), so scaling a workload from 3 to 3,000 pods adds no devices; the device count tracks nodes, not pods. All member egress on a node carries the gateway's tag as its source identity.
+- **Pods don't add tailnet devices** — the gateway is a shared node-local `tailscaled`, so scaling a workload from 3 to 3,000 pods adds no devices; the device count tracks nodes, not pods. All member egress on a node carries the gateway's tag as its source identity.
+- **Auto-follow scheduling** — the gateway runs **only on nodes that have member pods**, not every node in the cluster. The controller watches member pods and dynamically scopes the gateway DaemonSet via `nodeAffinity`. A group whose pods run on 3 of 50 nodes gets 3 gateway pods, not 50. Set `spec.gateway.nodeSelector` to pin the gateway to specific nodes instead (required for gVisor groups where CNI pre-wire needs the gateway running before member pods boot).
 - **Dual-stack** — the pod↔gateway veth is dual-stack, so members reach peers over IPv4 and IPv6 regardless of the cluster's own IP family.
 - **Live reconcile** — flip `acceptRoutes`, swap the exit node, or adjust DNS on a running group and the gateway reloads its config in place; member tunnels stay up.
 - **Native tailnet DNS** — opt a group into MagicDNS, the tailnet's split-DNS domains, app-connector names, and global forwarding via a mutating webhook, with `cluster.local` preserved.
@@ -42,24 +43,25 @@ API group: `tailscale.rajsingh.info/v1alpha1`.
 ## How it works
 
 ```
-              ┌──────────────────────────────────────────────┐
+               ┌──────────────────────────────────────────────┐
  EgressGroup ─►│  tailgate-operator (controller-runtime)      │
  (selector,    │  reconcile → authkey Secret (OAuth, tagged)  │
   tags,        │            + tailscaled config ConfigMap      │
   exitNode,    │            + per-group gateway DaemonSet      │
-  acceptRoutes,│                                              │
-  dns)         └───────────────┬──────────────────────────────┘
+  acceptRoutes,│  watches member pods → scopes the DaemonSet  │
+  dns,         │  to nodes with members (nodeAffinity)        │
+  gateway)     └───────────────┬──────────────────────────────┘
                                │ mints a tagged authkey, renders
                                │ tailscaled.json from the spec
                                ▼
-   ┌──────── node ─────────────────────────────────────────────┐
+   ┌──────── node (with member pods) ──────────────────────────┐
    │  tailgate-agent (DaemonSet, hostPID/hostNetwork)           │
    │   • installs tailgate-cni as binary/NAD or chained CNI     │
    │   • watches Pods + EgressGroups; for each MEMBER pod:      │
    │       veth-stitches it into the node's gateway netns +     │
    │       injects 100.64/10, the ULA + mirrored routes         │
    │                                                            │
-   │  tailgate-gateway (per-group DaemonSet, own netns)         │
+   │  tailgate-gateway (per-group, own netns)                   │
    │   tailscaled --tun=tailscale0 --config=tailscaled.json     │
    │   ip_forward + MASQUERADE onto tailscale0 (SNAT-to-tag)    │
    │   fwmark member traffic → policy table → tailscale0        │
@@ -72,11 +74,11 @@ API group: `tailscale.rajsingh.info/v1alpha1`.
 
 Three components make up the system (images published to `ghcr.io/rajsinghtech/`):
 
-- **`tailgate-operator`** (Deployment) — a controller-runtime reconciler. For each `EgressGroup` it mints an OAuth authkey tagged with the group's `spec.tags` (default `tag:k8s`) into a Secret, renders a declarative `tailscaled` config (`ipn.ConfigVAlpha`) from the spec into a ConfigMap, and creates the per-group gateway DaemonSet. Everything it creates is owner-referenced for garbage collection, and a finalizer deletes the gateway's tailnet device on teardown.
-- **`tailgate-gateway`** (per-group DaemonSet, privileged) — the group's shared tailnet node, **one per node** (a DaemonSet, so a member always has a same-node gateway to veth into; the group therefore has as many tailnet devices as nodes it runs on). It runs the official `tailscale/tailscale` image's `tailscaled` in kernel-TUN mode inside its **own** pod network namespace, so each group's `tailscale0` is isolated and the agent can stitch member veths into it. It enables IP forwarding, MASQUERADEs forwarded member traffic onto `tailscale0` (source identity = the group's tag), and `fwmark`s member traffic into a policy table that routes through `tailscale0` — so `tailscaled` sends each destination where its netmap says (a CGNAT peer, an accepted subnet/app-connector CIDR, or the exit node for `0.0.0.0/0`). It watches its config file and calls LocalAPI `ReloadConfig` on change, with no restart, and persists state so the node identity is stable across restarts.
+- **`tailgate-operator`** (Deployment) — a controller-runtime reconciler. For each `EgressGroup` it mints an OAuth authkey tagged with the group's `spec.tags` (default `tag:k8s`) into a Secret, renders a declarative `tailscaled` config (`ipn.ConfigVAlpha`) from the spec into a ConfigMap, and creates the per-group gateway DaemonSet **scoped to nodes with member pods** (auto-follow) or a static node selector. It watches member pods and re-scopes the DaemonSet as pods schedule and drain. Everything it creates is owner-referenced for garbage collection, and a finalizer deletes the gateway's tailnet device on teardown.
+- **`tailgate-gateway`** (per-group, privileged) — the group's shared tailnet node, **one per node that has member pods** (auto-follow) or one per matching node (static pin). It runs the official `tailscale/tailscale` image's `tailscaled` in kernel-TUN mode inside its **own** pod network namespace, so each group's `tailscale0` is isolated and the agent can stitch member veths into it. It enables IP forwarding, MASQUERADEs forwarded member traffic onto `tailscale0` (source identity = the group's tag), and `fwmark`s member traffic into a policy table that routes through `tailscale0` — so `tailscaled` sends each destination where its netmap says (a CGNAT peer, an accepted subnet/app-connector CIDR, or the exit node for `0.0.0.0/0`). It watches its config file and calls LocalAPI `ReloadConfig` on change, with no restart, and persists state so the node identity is stable across restarts.
 - **`tailgate-agent`** (DaemonSet, privileged + `hostPID` + `hostNetwork`) — installs the `tailgate-cni` binary when requested, then watches Pods and `EgressGroup`s. For each pod a group selects, it veth-stitches the pod into that node's group-gateway namespace and installs the tailnet routes (`100.64.0.0/10`, the ULA, and the routes the gateway accepts, mirrored from its netmap) toward the gateway. Membership is a label selector evaluated by the agent.
 
-A shared per-group gateway keeps the tailnet device count proportional to the number of groups rather than the number of pods, and preserves the group's tag as the source identity for all member traffic.
+A shared per-group gateway keeps the tailnet device count proportional to the number of groups × nodes-with-members, rather than the number of pods, and preserves the group's tag as the source identity for all member traffic.
 
 ## Install
 
@@ -242,6 +244,31 @@ member pods — so a member reaches exactly what the gateway can, like any Tails
 restrict a group to a subset, scope its tag with grants** in the tailnet policy (real policy
 enforcement), rather than a per-CIDR field on the CRD. Set `acceptRoutes: false` to keep members to
 CGNAT peers only. (Cluster pod/service CIDRs are always carved out — see `agent.clusterCIDRs` below.)
+
+### Gateway scheduling
+
+By default the gateway **auto-follows** member pods: it runs only on nodes that currently have
+member pods, and the controller re-scopes the DaemonSet as pods schedule and drain. A group whose
+pods run on 3 of 50 nodes gets 3 gateway pods, not 50 — the tailnet device count tracks
+nodes-with-members, not the cluster size.
+
+```bash
+kubectl get eg
+# NAME       PODS   NODES   DNS    AGE
+# payments   4      2       false  30s
+```
+
+Set `spec.gateway.nodeSelector` to pin the gateway to specific nodes instead of auto-following.
+This is **required for gVisor groups** — the CNI pre-wire path needs the gateway running before
+member pods boot, but auto-follow only lands the gateway after a member pod is already on a node.
+With a static node selector the gateway schedules on all matching nodes immediately:
+
+```yaml
+spec:
+  gateway:
+    nodeSelector:
+      nodepool: gvisor-pool
+```
 
 ### Exit nodes
 

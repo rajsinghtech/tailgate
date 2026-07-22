@@ -79,6 +79,8 @@ func TestExitNodeAutoSelect(t *testing.T) {
 	}
 	t.Logf("PASS: operator auto-resolved exit node %s (name=auto)", got.Status.ResolvedExitNode)
 
+	member := runPod(t, ctx, cs, "exitauto-member", map[string]string{"egress": name})
+	t.Cleanup(func() { _ = cs.CoreV1().Pods("default").Delete(context.Background(), member, *metav1.NewDeleteOptions(0)) })
 	waitGatewayReady(t, ctx, cs, name)
 
 	// the gateway committed the auto-selected exit node.
@@ -89,8 +91,6 @@ func TestExitNodeAutoSelect(t *testing.T) {
 	t.Log("PASS: gateway committed the auto-selected exit node")
 
 	// member-side full-tunnel plumbing is installed (table 7717) — i.e. the exit node took effect.
-	member := runPod(t, ctx, cs, "exitauto-member", map[string]string{"egress": name})
-	t.Cleanup(func() { _ = cs.CoreV1().Pods("default").Delete(context.Background(), member, *metav1.NewDeleteOptions(0)) })
 	if err := wait.PollUntilContextTimeout(ctx, 3*time.Second, 60*time.Second, true, func(ctx context.Context) (bool, error) {
 		rules, _, _ := execPod(ctx, cfg, cs, member, []string{"ip", "rule"})
 		rt, _, _ := execPod(ctx, cfg, cs, member, []string{"ip", "route", "show", "table", "7717"})

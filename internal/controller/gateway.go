@@ -62,8 +62,16 @@ func tagsFor(eg *egressv1.EgressGroup) []string {
 // tailscaled in kernel-TUN mode (our tailgate-gateway entrypoint) in its OWN pod
 // netns (not hostNetwork — so each group's tailscale0 is isolated and the agent can
 // stitch member veths into it). It forwards + MASQUERADEs onto tailscale0 (SNAT-to-tag).
-// Node-local so member pods always have a same-node gateway to be wired to.
-func gatewayDaemonSet(eg *egressv1.EgressGroup, ns, gwImage, tailnet string) *appsv1.DaemonSet {
+//
+// Scheduling follows one of two modes:
+//   - Auto-follow (default, nodeSelector empty): the DaemonSet carries a nodeAffinity
+//     that restricts it to nodes currently running member pods. memberNodes is the
+//     live set; an empty list means no members yet → schedule nowhere (sentinel name)
+//     until a member pod appears and the next reconcile widens the set.
+//   - Static pin (spec.gateway.nodeSelector set): the DaemonSet uses that nodeSelector
+//     and auto-follow is disabled. Required for gVisor groups where the CNI pre-wire
+//     path needs the gateway running before member pods boot.
+func gatewayDaemonSet(eg *egressv1.EgressGroup, ns, gwImage, tailnet string, memberNodes []string) *appsv1.DaemonSet {
 	l := gatewayLabels(eg.Name)
 	// Node config (accept-routes, exit-node, DNS) and the authkey are delivered as files under
 	// /etc/tailgate, not env: the config is a watched ConfigMap (hot-reload) and tags ride on
@@ -75,6 +83,64 @@ func gatewayDaemonSet(eg *egressv1.EgressGroup, ns, gwImage, tailnet string) *ap
 		{Name: "NODE_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"}}},
 	}
 	hpType := corev1.HostPathDirectoryOrCreate
+
+	podSpec := corev1.PodSpec{
+		// tailscaled needs no long drain; a short grace shrinks the rolling-update gap.
+		TerminationGracePeriodSeconds: ptr.To(int64(15)),
+		Containers: []corev1.Container{{
+			Name:  "gateway",
+			Image: gwImage,
+			Env:   env,
+			SecurityContext: &corev1.SecurityContext{
+				Privileged: ptr.To(true), // kernel TUN + iptables + sysctls
+			},
+			// persist tailscaled state (node-local) so the identity is stable across
+			// restarts; share a host dir for coordination.
+			VolumeMounts: []corev1.VolumeMount{
+				{Name: "run", MountPath: "/run/tailgate"},
+				{Name: "state", MountPath: "/var/lib/tailscale"},
+				// projected (NOT subPath) so ConfigMap/Secret updates propagate for hot-reload
+				{Name: "conf", MountPath: gwConfigDir, ReadOnly: true},
+			},
+			ReadinessProbe: &corev1.Probe{
+				ProbeHandler:        corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"/usr/local/bin/tailgate-gateway", "ready"}}},
+				InitialDelaySeconds: 3,
+				PeriodSeconds:       5,
+				FailureThreshold:    30,
+			},
+			// Restart a wedged/dead tailscaled (daemon unresponsive), but not on a
+			// transient tailnet disconnect — `live` checks only LocalAPI liveness.
+			LivenessProbe: &corev1.Probe{
+				ProbeHandler:        corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"/usr/local/bin/tailgate-gateway", "live"}}},
+				InitialDelaySeconds: 30,
+				PeriodSeconds:       10,
+				FailureThreshold:    3,
+			},
+		}},
+		Volumes: []corev1.Volume{
+			{Name: "run", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/run/tailgate", Type: &hpType}}},
+			{Name: "state", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: stateDir(eg.Name, tailnet), Type: &hpType}}},
+			// /etc/tailgate = tailscaled.json (from ConfigMap) + authkey (from Secret).
+			{Name: "conf", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: []corev1.VolumeProjection{
+				{ConfigMap: &corev1.ConfigMapProjection{
+					LocalObjectReference: corev1.LocalObjectReference{Name: gatewayConfigName(eg.Name)},
+					Items:                []corev1.KeyToPath{{Key: "tailscaled.json", Path: "tailscaled.json"}},
+				}},
+				{Secret: &corev1.SecretProjection{
+					LocalObjectReference: corev1.LocalObjectReference{Name: authKeySecretName(eg.Name)},
+					Items:                []corev1.KeyToPath{{Key: "TS_AUTHKEY", Path: "authkey"}},
+				}},
+			}}}},
+		},
+	}
+
+	// Scheduling: static pin (gVisor escape hatch) vs auto-follow (default).
+	if eg.Spec.Gateway != nil && len(eg.Spec.Gateway.NodeSelector) > 0 {
+		podSpec.NodeSelector = eg.Spec.Gateway.NodeSelector
+	} else {
+		podSpec.Affinity = memberNodeAffinity(memberNodes)
+	}
+
 	return &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{Name: gatewayName(eg.Name), Namespace: ns, Labels: l},
 		Spec: appsv1.DaemonSetSpec{
@@ -87,55 +153,31 @@ func gatewayDaemonSet(eg *egressv1.EgressGroup, ns, gwImage, tailnet string) *ap
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: l},
-				Spec: corev1.PodSpec{
-					// tailscaled needs no long drain; a short grace shrinks the rolling-update gap.
-					TerminationGracePeriodSeconds: ptr.To(int64(15)),
-					Containers: []corev1.Container{{
-						Name:  "gateway",
-						Image: gwImage,
-						Env:   env,
-						SecurityContext: &corev1.SecurityContext{
-							Privileged: ptr.To(true), // kernel TUN + iptables + sysctls
-						},
-						// persist tailscaled state (node-local) so the identity is stable across
-						// restarts; share a host dir for coordination.
-						VolumeMounts: []corev1.VolumeMount{
-							{Name: "run", MountPath: "/run/tailgate"},
-							{Name: "state", MountPath: "/var/lib/tailscale"},
-							// projected (NOT subPath) so ConfigMap/Secret updates propagate for hot-reload
-							{Name: "conf", MountPath: gwConfigDir, ReadOnly: true},
-						},
-						ReadinessProbe: &corev1.Probe{
-							ProbeHandler:        corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"/usr/local/bin/tailgate-gateway", "ready"}}},
-							InitialDelaySeconds: 3,
-							PeriodSeconds:       5,
-							FailureThreshold:    30,
-						},
-						// Restart a wedged/dead tailscaled (daemon unresponsive), but not on a
-						// transient tailnet disconnect — `live` checks only LocalAPI liveness.
-						LivenessProbe: &corev1.Probe{
-							ProbeHandler:        corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"/usr/local/bin/tailgate-gateway", "live"}}},
-							InitialDelaySeconds: 30,
-							PeriodSeconds:       10,
-							FailureThreshold:    3,
-						},
+				Spec:       podSpec,
+			},
+		},
+	}
+}
+
+// memberNodeAffinity builds a nodeAffinity that restricts the DaemonSet to the given
+// node names (auto-follow mode). An empty list means no members yet — the affinity
+// references a sentinel node name that matches nothing, so the DaemonSet exists but
+// schedules zero pods. The next reconcile that finds member pods widens the set and
+// the DaemonSet controller places pods on those nodes.
+func memberNodeAffinity(nodes []string) *corev1.Affinity {
+	if len(nodes) == 0 {
+		nodes = []string{"tailgate-no-members"}
+	}
+	return &corev1.Affinity{
+		NodeAffinity: &corev1.NodeAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+				NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+					MatchFields: []corev1.NodeSelectorRequirement{{
+						Key:      "metadata.name",
+						Operator: corev1.NodeSelectorOpIn,
+						Values:   nodes,
 					}},
-					Volumes: []corev1.Volume{
-						{Name: "run", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/run/tailgate", Type: &hpType}}},
-						{Name: "state", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: stateDir(eg.Name, tailnet), Type: &hpType}}},
-						// /etc/tailgate = tailscaled.json (from ConfigMap) + authkey (from Secret).
-						{Name: "conf", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: []corev1.VolumeProjection{
-							{ConfigMap: &corev1.ConfigMapProjection{
-								LocalObjectReference: corev1.LocalObjectReference{Name: gatewayConfigName(eg.Name)},
-								Items:                []corev1.KeyToPath{{Key: "tailscaled.json", Path: "tailscaled.json"}},
-							}},
-							{Secret: &corev1.SecretProjection{
-								LocalObjectReference: corev1.LocalObjectReference{Name: authKeySecretName(eg.Name)},
-								Items:                []corev1.KeyToPath{{Key: "TS_AUTHKEY", Path: "authkey"}},
-							}},
-						}}}},
-					},
-				},
+				}},
 			},
 		},
 	}

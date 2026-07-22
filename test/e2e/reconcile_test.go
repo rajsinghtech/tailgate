@@ -65,6 +65,8 @@ func TestConfigReconcileNoRestart(t *testing.T) {
 	}), "create egressgroup")
 	t.Cleanup(func() { deleteEGWait(kc, name) }) // runs before tailnet Close (LIFO)
 
+	member := runPod(t, ctx, cs, "recon-member", map[string]string{"egress": name})
+	t.Cleanup(func() { _ = cs.CoreV1().Pods("default").Delete(context.Background(), member, *metav1.NewDeleteOptions(0)) })
 	waitGatewayReady(t, ctx, cs, name)
 
 	// 3. snapshot the gateway pod identity + the node's RouteAll pref (should be false).

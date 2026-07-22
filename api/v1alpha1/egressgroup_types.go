@@ -55,6 +55,18 @@ type MemberDNS struct {
 	Ndots *int32 `json:"ndots,omitempty"`
 }
 
+// GatewaySpec controls how and where the per-group gateway is scheduled.
+type GatewaySpec struct {
+	// NodeSelector pins the gateway to specific nodes instead of auto-following member
+	// pods. When set, the gateway runs on all nodes matching this selector and auto-follow
+	// is disabled. Use this for gVisor groups (the CNI pre-wire path needs the gateway
+	// running before member pods boot) or to restrict the gateway to a node pool. When
+	// empty (default), the gateway auto-follows: it runs only on nodes that currently have
+	// member pods, appearing and disappearing as pods schedule and drain.
+	// +optional
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+}
+
 // EgressGroupSpec is the desired state of an EgressGroup.
 type EgressGroupSpec struct {
 	// Selector picks member pods (gateway-side selection; no Multus needed).
@@ -83,6 +95,13 @@ type EgressGroupSpec struct {
 	// ["tag:k8s"] (the Tailscale operator's convention) when unset.
 	// +optional
 	Tags []string `json:"tags,omitempty"`
+
+	// Gateway controls how and where the per-group gateway is scheduled. When unset,
+	// the gateway auto-follows member pods — it runs only on nodes that have member
+	// pods, appearing and disappearing as pods come and go. Set gateway.nodeSelector
+	// to pin the gateway to specific nodes instead (required for gVisor groups).
+	// +optional
+	Gateway *GatewaySpec `json:"gateway,omitempty"`
 }
 
 // AcceptRoutesEnabled reports whether the gateway accepts advertised subnet-router and
@@ -120,12 +139,19 @@ type EgressGroupStatus struct {
 	// static NodeID, or the node the operator auto-selected.
 	// +optional
 	ResolvedExitNode string `json:"resolvedExitNode,omitempty"`
+	// GatewayNodes is the set of node names the gateway is currently scheduled on.
+	// In auto-follow mode this tracks member pods; with a static nodeSelector it echoes
+	// the matching nodes. Empty means the gateway is scheduled nowhere (no members yet
+	// in auto-follow mode).
+	// +optional
+	GatewayNodes []string `json:"gatewayNodes,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,shortName=eg
 // +kubebuilder:printcolumn:name="Pods",type=integer,JSONPath=`.status.matchedPods`
+// +kubebuilder:printcolumn:name="Nodes",type=integer,JSONPath=`.status.gatewayNodes`
 // +kubebuilder:printcolumn:name="DNS",type=boolean,JSONPath=`.spec.dns.enabled`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 

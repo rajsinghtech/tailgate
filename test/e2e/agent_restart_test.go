@@ -69,8 +69,8 @@ func TestAgentRestartNoReWire(t *testing.T) {
 	}), "create egressgroup")
 	t.Cleanup(func() { deleteEGWait(kc, "e2e") })
 
-	waitGatewayReady(t, ctx, cs, "e2e")
 	member := runPod(t, ctx, cs, "e2e-restart-member", map[string]string{"egress": "e2e"})
+	waitGatewayReady(t, ctx, cs, "e2e")
 	t.Cleanup(func() {
 		_ = cs.CoreV1().Pods("default").Delete(context.Background(), member, *metav1.NewDeleteOptions(0))
 	})

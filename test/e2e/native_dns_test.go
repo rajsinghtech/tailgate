@@ -49,10 +49,10 @@ func TestNativeDNSWebhook(t *testing.T) {
 		},
 	}), "create egressgroup")
 	t.Cleanup(func() { deleteEGWait(kc, name) })
-	waitGatewayReady(t, ctx, cs, name)
 
 	// member is a NORMAL pod (no manual dnsConfig); the webhook must inject native DNS.
 	member := runPod(t, ctx, cs, "dnswh-member", map[string]string{"egress": name})
+	waitGatewayReady(t, ctx, cs, name)
 	t.Cleanup(func() { _ = cs.CoreV1().Pods("default").Delete(context.Background(), member, *metav1.NewDeleteOptions(0)) })
 
 	got, err := cs.CoreV1().Pods("default").Get(ctx, member, metav1.GetOptions{})

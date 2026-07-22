@@ -1,9 +1,17 @@
 # Agent Notes
 
+## Gateway scheduling (auto-follow)
+
+- The gateway DaemonSet **auto-follows** member pods by default: it carries a `nodeAffinity` that restricts it to nodes currently running pods the EgressGroup selects. The controller watches pods and re-scopes the DaemonSet as pods schedule and drain.
+- An empty member-node set (no matching pods yet, or empty selector) schedules the DaemonSet nowhere — it exists but runs zero pods, and springs to life when a member pod appears on a node.
+- `spec.gateway.nodeSelector` opts out of auto-follow and pins the gateway to specific nodes. This is **required for gVisor groups** (see below).
+- The operator already has `pods/list/watch` RBAC — no new permissions needed for auto-follow.
+
 ## gVisor and CNI pre-wiring
 
 - gVisor/runsc does not hot-plug interfaces into its userspace netstack. It scrapes interfaces, addresses, and routes from the pod netns at sandbox start.
 - For gVisor pods, `ts0` must exist during CNI ADD. Agent-only async wiring after `PodRunning` is invisible inside gVisor.
+- **Auto-follow scheduling is incompatible with gVisor CNI pre-wire.** Auto-follow lands the gateway only after a member pod is on the node, but CNI pre-wire needs the gateway netns to exist *before* the member sandbox boots. For gVisor groups, set `spec.gateway.nodeSelector` to pre-select the nodes where the gateway should run — the DaemonSet schedules on all matching nodes immediately, before any member pod arrives.
 - The supported Multus path is `agent.cniMode: binary` plus a `NetworkAttachmentDefinition` that invokes `tailgate-cni` only for annotated pods.
 - Do not globally chain `tailgate-cni` into Cilium's delegate conflist when Multus is the top-level CNI. Multus expects the delegate result to preserve primary network info; inserting a secondary plugin there can break unrelated pod sandbox creation.
 - In Multus/NAD mode, `tailgate-cni` may be invoked without `prevResult`. It uses `K8S_POD_UID` as the stable key, creates `ts0` pre-sandbox, and writes `/run/tailgate/prewire/<podUID>` so the agent can adopt the host-side peer after the pod is Running.
