@@ -61,6 +61,20 @@
           "type": "object",
           "additionalProperties": false
         },
+        "gateway": {
+          "description": "Gateway controls how and where the per-group gateway is scheduled. When unset,\nthe gateway auto-follows member pods \u2014 it runs only on nodes that have member\npods, appearing and disappearing as pods come and go. Set gateway.nodeSelector\nto pin the gateway to specific nodes instead (required for gVisor groups).",
+          "properties": {
+            "nodeSelector": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "NodeSelector pins the gateway to specific nodes instead of auto-following member\npods. When set, the gateway runs on all nodes matching this selector and auto-follow\nis disabled. Use this for gVisor groups (the CNI pre-wire path needs the gateway\nrunning before member pods boot) or to restrict the gateway to a node pool. When\nempty (default), the gateway auto-follows: it runs only on nodes that currently have\nmember pods, appearing and disappearing as pods schedule and drain.",
+              "type": "object"
+            }
+          },
+          "type": "object",
+          "additionalProperties": false
+        },
         "selector": {
           "description": "Selector picks member pods (gateway-side selection; no Multus needed).",
           "properties": {
@@ -245,6 +259,13 @@
         },
         "gatewayHostname": {
           "type": "string"
+        },
+        "gatewayNodes": {
+          "description": "GatewayNodes is the set of node names the gateway is currently scheduled on.\nIn auto-follow mode this tracks member pods; with a static nodeSelector it echoes\nthe matching nodes. Empty means the gateway is scheduled nowhere (no members yet\nin auto-follow mode).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "matchedPods": {
           "format": "int32",
