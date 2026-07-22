@@ -23,9 +23,9 @@ import (
 )
 
 const (
-	loginBase   = "https://login.tailscale.com"
-	tokenURL    = "https://api.tailscale.com/api/v2/oauth/token"
-	whoamiURL   = "https://api.tailscale.com/api/v2/tailnet/-/whoami"
+	loginBase  = "https://login.tailscale.com"
+	tokenURL   = "https://api.tailscale.com/api/v2/oauth/token"
+	whoamiURL  = "https://api.tailscale.com/api/v2/tailnet/-/whoami"
 	sessionMax = 24 * time.Hour
 	cookieName = "tailgate-session"
 )
