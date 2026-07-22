@@ -31,11 +31,11 @@ const ownerAnnotation = "tailgate.dev/owner"
 
 // Server is the UI HTTP server.
 type Server struct {
-	kc        client.Client
-	scheme    *runtime.Scheme
-	auth      *auth.Handler
-	log       *slog.Logger
-	tmpl      *template.Template
+	kc          client.Client
+	scheme      *runtime.Scheme
+	auth        *auth.Handler
+	log         *slog.Logger
+	tmpl        *template.Template
 	adminEmails []string
 }
 
